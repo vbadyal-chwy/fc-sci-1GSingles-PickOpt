@@ -1,0 +1,30 @@
+# Ignore config files
+root/config/gurobi_config.yaml
+
+# Ignore input / output folders
+*.csv
+
+# Ignore log files
+*.log
+
+# Python-specific ignores
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+pickplan-env/
+env/
+*.venv
+.env
+
+# IDE-specific files
+.vscode/
+.idea/
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+/root/src/cluster_analysis/
+/root/src/cluster_analysis_residuals/
