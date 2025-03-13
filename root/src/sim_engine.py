@@ -186,6 +186,9 @@ class SimEngine:
             available_containers, 
             current_time
         )
+        timestamp = current_time.strftime('%Y%m%d_%H%M%S')
+        output_path = f'./output/available_containers_{timestamp}.csv'
+        available_containers_with_slack.to_csv(output_path, index=False)   
         
         # Check if sequential optimization is enabled
         use_clustering = self.config['tour_formation'].get('clustering_enabled', False)     #bookmark
@@ -206,8 +209,11 @@ class SimEngine:
                     container_data=available_containers_with_slack,
                     slotbook_data=slotbook_data,
                     planning_timestamp=current_time,
-                    config=self.config
+                    config=self.config,
+                    num_tours=0
                 )
+                
+                
                 summary_dfs = temp_solver.generate_summary(pick_solution, available_containers)
                 self.unassigned_tours.add_tours(summary_dfs)
             else:
@@ -218,7 +224,8 @@ class SimEngine:
                 container_data=available_containers_with_slack,
                 slotbook_data=slotbook_data,
                 planning_timestamp=current_time,
-                config=self.config
+                config=self.config,
+                num_tours= math.ceil(available_containers /self.max_containers_per_tour)
             )
             
             pick_solution = pick_solver.solve(sequential = False)
@@ -322,7 +329,7 @@ class SimEngine:
         ]
         
         # Filter to top 1000 unique container_ids when sorted by container_id  To Do - Remove this
-        top_container_ids = sorted(available['container_id'].unique())[:1000]            #Bookmark
+        top_container_ids = sorted(available['container_id'].unique())#[:30000]            #Bookmark
         available = available[available['container_id'].isin(top_container_ids)]
         
         # For testing: filter to only the nearest multiple of max_containers_per_tour - To Do - Remove this
@@ -755,8 +762,8 @@ class SimEngine:
             
             # Constants
             OTHER_TIME_BUFFER = 30  # minutes for grooming, packing, shipping
-            TRAVEL_TIME_CONSTANT = np.random.normal(5, 3)  # minutes per aisle        
-            AISLE_CROSSING_FACTOR = 1/8  # factor for crossing aisles vs traveling in aisles
+            TRAVEL_TIME_CONSTANT = np.random.normal(5, 3)  # minutes per aisle        #should be based on distance / speed
+            AISLE_CROSSING_FACTOR = 1/20  # factor for crossing aisles vs traveling in aisles
             
             # Create a time-of-day capacity dictionary (0=no capacity, 1=full capacity)
             # This represents shift changes, breaks, lunches, etc.
@@ -857,7 +864,7 @@ class SimEngine:
                 if container_aisles:
                     aisles_in = len(container_aisles)
                     aisles_across = max(container_aisles) - min(container_aisles) if aisles_in > 1 else 0
-                    travel_time_minutes = (aisles_in + aisles_across * AISLE_CROSSING_FACTOR) * TRAVEL_TIME_CONSTANT
+                    travel_time_minutes = ((aisles_in + aisles_across * AISLE_CROSSING_FACTOR) * TRAVEL_TIME_CONSTANT)
                 else:
                     travel_time_minutes = 0
                     
@@ -940,7 +947,8 @@ class SimEngine:
             ]
             
             self.logger.info("\nSlack Calculation Summary:")
-            self.logger.info("\n" + tabulate(summary_data, headers=['Category', 'Count'], tablefmt='grid'))            
+            self.logger.info("\n" + tabulate(summary_data, headers=['Category', 'Count'], tablefmt='grid'))  
+                      
             return result_df
             
         except Exception as e:

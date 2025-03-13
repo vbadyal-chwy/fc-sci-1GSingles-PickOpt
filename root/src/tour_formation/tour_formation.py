@@ -8,7 +8,8 @@ from tabulate import tabulate
 from utility.logging_config import setup_logging
 import time
 import math
-from tour_formation.container_clustering import cluster_containers
+# Import the existing functions from container_clustering.py
+from tour_formation.container_clustering import modified_cluster_containers
 
 @dataclass
 class ModelData:
@@ -36,7 +37,7 @@ class TourFormationSolver:
     """
     
     def __init__(self, container_data: pd.DataFrame, slotbook_data: pd.DataFrame, planning_timestamp: datetime,
-        config: Dict[str, Any]
+        config: Dict[str, Any], num_tours: int
     ):
         """
         Initialize the tour formation solver.
@@ -70,10 +71,10 @@ class TourFormationSolver:
         self.early_termination_seconds = pick_config['early_termination_seconds']
         self.max_cluster_size = pick_config['max_cluster_size']
         self.clustering_enabled = pick_config['clustering_enabled']
-        
+        self.num_tours = num_tours
         
         # Calculate number of tours based on container count
-        num_containers = len(container_data['container_id'].unique())
+        #num_containers = len(container_data['container_id'].unique())
         #self.num_tours = math.ceil(num_containers /self.min_containers_per_tour)
         
         # Gurobi configs
@@ -181,13 +182,13 @@ class TourFormationSolver:
             for _, row in self.slotbook_data.iterrows():
                 aisle_inventory[(row['item_number'], row['aisle_sequence'])] = row['actual_qty']
             
-            self.num_tours = math.floor(len(container_ids) / self.max_containers_per_tour)
+            #self.num_tours = math.floor(len(container_ids) / self.max_containers_per_tour)
             
             # Define tour indices - adjust the number of tours based on filtered containers if needed
             if container_ids is not None:
                 #adjusted_num_tours = max(1, math.floor(len(container_ids) / self.max_containers_per_tour))
-                adjusted_num_tours = max(0, int(math.floor(len(container_ids) / self.max_containers_per_tour)))      #bookmark
-                tour_indices = list(range(adjusted_num_tours))
+                #adjusted_num_tours = max(0, int(math.floor(len(container_ids) / self.max_containers_per_tour)))      #bookmark
+                tour_indices = list(range( self.num_tours))
             else:
                 tour_indices = list(range(self.num_tours))
             
@@ -223,7 +224,7 @@ class TourFormationSolver:
         -------
         Tuple[bool, Set[str], Dict[str, float]]
             - Boolean indicating if slack data is available
-            - Set of critical container IDs (negative slack)
+            - Set of container IDs
             - Dictionary of priority weights by container ID
         """
         # Check if slack data is available
@@ -322,7 +323,7 @@ class TourFormationSolver:
 
         # Terminate if objective has not improved in 20s
         if time.time() - model._time > self.early_termination_seconds:
-            self.logger.info("Terminating: No improvement in 120 seconds")
+            self.logger.info(f"Terminating: No improvement in {self.early_termination_seconds} seconds")
             model.terminate()
               
     def solve(self, sequential: bool) -> Dict[str, Any]:
@@ -1241,7 +1242,7 @@ class TourFormationSolver:
         # Get configuration parameters
         containers_per_tour = config['tour_formation']['max_containers_per_tour']
         max_cluster_size = config.get('tour_formation', {}).get('max_cluster_size', 200)
-        max_residual_attempts = config.get('tour_formation', {}).get('max_residual_attempts', 5)  # Prevent infinite loops
+        max_picking_capacity = config['global']['hourly_container_target']
         
         # Setup logging
         logger = setup_logging(config, 'sequential_tour_formation')
@@ -1264,19 +1265,33 @@ class TourFormationSolver:
         processed_containers = set()
         tour_id_offset = 0
         
-        # Initial clustering of all containers
+        # Check if prioritize_critical flag is set
+        prioritize_critical = config.get('tour_formation', {}).get('prioritize_critical', True)
+        
         if len(all_container_ids) > max_cluster_size:
-            clusters = cluster_containers(
+            # Use our enhanced clustering algorithm
+            clusters_result  = modified_cluster_containers(
                 container_data, 
                 slotbook_data, 
                 max_cluster_size=max_cluster_size,
+                containers_per_tour=containers_per_tour,
                 use_distinct_aisles=False,
                 generate_visuals=generate_visuals,
-                output_path=config.get('visualization_path', './cluster_analysis')
+                output_path=config.get('visualization_path', './cluster_analysis'),
+                prioritize_critical=prioritize_critical,
+                max_picking_capacity = max_picking_capacity
             )
         else:
             # If total containers are within max_cluster_size, create a single cluster
             clusters = {0: list(all_container_ids)}
+            # Create a simple stats DataFrame for the single cluster
+            cluster_stats_df = pd.DataFrame([{
+                'ClusterID': '0', 
+                'TotalContainers': len(all_container_ids),
+                'NumTours': max(1, len(all_container_ids) // containers_per_tour)
+            }])
+        
+        clusters, cluster_stats_df = clusters_result
         
         # Process each cluster sequentially
         for cluster_id, cluster_container_ids in clusters.items():
@@ -1286,18 +1301,29 @@ class TourFormationSolver:
                 
             # Filter out already processed containers
             cluster_container_ids = [c_id for c_id in cluster_container_ids if c_id not in processed_containers]
-            
+        
             if not cluster_container_ids or len(cluster_container_ids) < config['tour_formation']['min_containers_per_tour']:
                 continue
                 
             logger.info(f"Processing cluster {cluster_id} with {len(cluster_container_ids)} containers")
             
-            # Create a solver instance for this cluster
+            # Get the number of tours for this cluster from the stats DataFrame
+            cluster_stats_row = cluster_stats_df[cluster_stats_df['ClusterID'] == str(cluster_id)]
+            num_tours = 1  # Default to 1 if not found
+            
+            if not cluster_stats_row.empty and 'NumTours' in cluster_stats_row.columns:
+                num_tours = int(cluster_stats_row['NumTours'].iloc[0])
+                logger.info(f"Cluster {cluster_id} requires {num_tours} tours based on statistics")
+            else:
+                logger.warning(f"No tour count found for cluster {cluster_id}, using default value of 1")
+            
+            # Create a solver instance for this cluster with the number of tours
             solver = cls(
                 container_data=container_data,
                 slotbook_data=slotbook_data,
                 planning_timestamp=planning_timestamp,
-                config=config
+                config=config,
+                num_tours=num_tours  # Pass the tour count as a parameter
             )
             
             # Prepare data for this specific cluster
@@ -1327,147 +1353,16 @@ class TourFormationSolver:
             else:
                 logger.warning(f"No solution found for cluster {cluster_id}")
         
-        # Initialize residual tracking
-        residual_containers = all_container_ids - processed_containers
-        previous_residual_count = len(all_container_ids)  # Initialize with total count
-        residual_attempt = 0
-        
-        # Iteratively process residuals until all assigned or no progress made
-        while residual_containers and residual_attempt < max_residual_attempts:
-            residual_count = len(residual_containers)
-            
-            # Check if we're making progress
-            if residual_count >= previous_residual_count:
-                logger.warning(f"No progress in reducing residuals (attempt {residual_attempt+1}): {residual_count} remaining")
-                break
-            
-            previous_residual_count = residual_count
-            residual_attempt += 1
-            
-            logger.info(f"Processing residual containers (attempt {residual_attempt}): {residual_count} containers")
-            
-            # Check if the residual count exceeds max_cluster_size
-            if residual_count > max_cluster_size:
-                logger.info(f"Residual container count ({residual_count}) exceeds max_cluster_size ({max_cluster_size})")
-                logger.info("Clustering residual containers for sequential processing")
-                
-                # Create filtered dataframe with only residual containers
-                residual_container_data = container_data[container_data['container_id'].isin(residual_containers)]
-                
-                # Apply clustering to residual containers
-                residual_clusters = cluster_containers(
-                    residual_container_data,
-                    slotbook_data,
-                    max_cluster_size=max_cluster_size,
-                    use_distinct_aisles=False,
-                    generate_visuals=generate_visuals,
-                    output_path=f"{config.get('visualization_path', './cluster_analysis')}/residuals_attempt_{residual_attempt}"
-                )
-                
-                # Initialize tracking for this residual attempt
-                residual_processed_this_attempt = set()
-                
-                # Process each residual cluster sequentially
-                for rc_id, rc_container_ids in residual_clusters.items():
-                    # Skip if too few containers
-                    if not rc_container_ids or len(rc_container_ids) < config['tour_formation']['min_containers_per_tour']:
-                        continue
-                    
-                    logger.info(f"Processing residual cluster {rc_id} with {len(rc_container_ids)} containers")
-                    
-                    # Create a solver instance for this residual cluster
-                    rc_solver = cls(
-                        container_data=container_data,
-                        slotbook_data=slotbook_data,
-                        planning_timestamp=planning_timestamp,
-                        config=config
-                    )
-                    
-                    # Prepare data for this specific residual cluster
-                    rc_solver.prepare_data(container_ids=rc_container_ids)
-                    
-                    # Set the tour ID offset
-                    rc_solver.tour_id_offset = tour_id_offset
-                    
-                    # Solve for this residual cluster
-                    rc_solution = rc_solver.solve(sequential=True)
-                    
-                    if rc_solution:
-                        # Adjust tour IDs using the offset
-                        adjusted_rc_solution = cls._adjust_tour_ids(rc_solution, tour_id_offset)
-                        
-                        # Update the offset for the next cluster
-                        max_tour_id = max(adjusted_rc_solution['aisle_ranges'].keys()) if adjusted_rc_solution['aisle_ranges'] else tour_id_offset
-                        tour_id_offset = max_tour_id + 1
-                        
-                        # Merge solutions
-                        cls._merge_solutions(combined_solution, adjusted_rc_solution)
-                        
-                        # Update processed containers
-                        newly_processed = set(adjusted_rc_solution['container_assignments'].keys())
-                        processed_containers.update(newly_processed)
-                        residual_processed_this_attempt.update(newly_processed)
-                        
-                        logger.info(f"Residual cluster {rc_id} solution: {len(newly_processed)} containers assigned")
-                    else:
-                        logger.warning(f"No solution found for residual cluster {rc_id}")
-                
-                # Log summary for this residual attempt
-                logger.info(f"Residual attempt {residual_attempt} assigned {len(residual_processed_this_attempt)} out of {residual_count} containers")
-                
-            else:
-                # If residual count is within max_cluster_size, process as a single group
-                logger.info(f"Processing {residual_count} residual containers as a single group")
-                
-                # Create a solver instance for residual containers
-                residual_solver = cls(
-                    container_data=container_data,
-                    slotbook_data=slotbook_data,
-                    planning_timestamp=planning_timestamp,
-                    config=config
-                )
-                
-                # Prepare data for residual containers
-                residual_solver.prepare_data(container_ids=list(residual_containers))
-                
-                # Set the tour ID offset
-                residual_solver.tour_id_offset = tour_id_offset
-                
-                # Solve for residual containers
-                residual_solution = residual_solver.solve(sequential=True)
-                
-                if residual_solution:
-                    # Adjust tour IDs using the offset
-                    adjusted_residual = cls._adjust_tour_ids(residual_solution, tour_id_offset)
-                    
-                    # Update the offset for the next iteration
-                    max_tour_id = max(adjusted_residual['aisle_ranges'].keys()) if adjusted_residual['aisle_ranges'] else tour_id_offset
-                    tour_id_offset = max_tour_id + 1
-                    
-                    # Merge solutions
-                    cls._merge_solutions(combined_solution, adjusted_residual)
-                    
-                    # Update processed containers
-                    newly_processed = set(adjusted_residual['container_assignments'].keys())
-                    processed_containers.update(newly_processed)
-                    
-                    # Log success
-                    logger.info(f"Residual solution (attempt {residual_attempt}): {len(newly_processed)} out of {residual_count} containers assigned")
-                else:
-                    logger.warning(f"No solution found for residual containers (attempt {residual_attempt})")
-            
-            # Recalculate residual containers for next iteration
-            residual_containers = all_container_ids - processed_containers
-        
         # Check if any containers remain unassigned after all attempts
         final_unassigned = all_container_ids - processed_containers
         if final_unassigned:
-            logger.warning(f"{len(final_unassigned)} containers remain unassigned after {residual_attempt} residual processing attempts")
+            logger.warning(f"{len(final_unassigned)} containers remain unassigned")
         
         # Log final statistics
         logger.info(f"Sequential optimization complete: {len(combined_solution['container_assignments'])} out of {len(all_container_ids)} containers assigned to {combined_solution['metrics']['active_tours']} tours")
         
         return combined_solution
+
 
     @staticmethod
     def _adjust_tour_ids(solution: Dict[str, Any], offset: int) -> Dict[str, Any]:

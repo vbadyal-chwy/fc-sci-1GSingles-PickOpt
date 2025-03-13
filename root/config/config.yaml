@@ -2,9 +2,9 @@
 global:
   wh_id: 'AVP1'
   input_mode: 1                     # 1 - load from Vertica, #2 - use CSV input files
-  start_time: '2025-01-22 15:00:00'
-  end_time: '2025-01-22 15:29:00' 
-  hourly_container_target: 1000
+  start_time: '2025-03-06 14:00:00'
+  end_time: '2025-03-06 14:29:00' 
+  hourly_container_target: 1380
 
 #Optimization Parameters
 tour_formation:
@@ -15,7 +15,7 @@ tour_formation:
   clustering_enabled: true         # Enable clustering to decompose the problemn
   max_cluster_size: 200            # Maximum cluster size
   max_residual_attempts: 5         # Maximum number of attempts to assign residual containers
-  early_termination_seconds: 120   # Early termination time in seconds, if the incumbent solution does not improve
+  early_termination_seconds: 60    # Early termination time in seconds, if the incumbent solution does not improve
 
   weights:
     lateness: 5                   # alpha: Weight for lateness (this will be replaced by slack weights)
@@ -30,10 +30,10 @@ tour_formation:
 
 tour_allocation:
 
-  max_pickers: 2                   # Number of available pickers
+  max_pickers: 30                   # Number of available pickers
   ta_interval: 30                     # Interval of tour formation in minutes
-  avg_cycle_time: 10               # Average cycle time in minutes
-  avg_time_to_prepare_tour: 2       # Average time to prepare a tour in minutes
+  avg_cycle_time: 150               # Average cycle time in minutes
+  avg_time_to_prepare_tour: 5       # Average time to prepare a tour in minutes
   buffer_variability_factor: 1.25   # Buffer variability factor
 
   weights:

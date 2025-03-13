@@ -1,0 +1,38 @@
+# HDBSCAN Container Clustering Configuration
+
+# Input data files (located in input_data folder)
+input:
+  container_file: "container_data.csv"
+  slotbook_file: "slotbook_data.csv"
+
+# Output settings
+output:
+  dir: "output/hdbscan_results"
+
+# Feature settings
+features:
+  # Whether to use distinct aisles count (true) or aisle span (false) as secondary feature
+  use_distinct_aisles: false
+  # Weight for the centroid feature
+  centroid_weight: 0.5
+  # Weight for the secondary feature (distinct aisles or span)
+  secondary_weight: 0.5
+
+# HDBSCAN algorithm parameters
+hdbscan:
+  # Minimum size of clusters
+  min_cluster_size: 80
+  # Number of samples in a neighborhood for a point to be a core point
+  # If null, will default to min_cluster_size
+  min_samples: 2
+  # Epsilon to use when determining cluster membership
+  cluster_selection_epsilon: 0.01
+  # Alpha value for the RobustSingleLinkage
+  alpha: 1.0
+  # Method used to select clusters
+  # Options: 'eom' (Excess of Mass) or 'leaf'
+  cluster_selection_method: "eom"
+
+# Visualization settings
+visualizations:
+  enabled: true
