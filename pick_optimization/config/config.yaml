@@ -1,0 +1,90 @@
+# Pick Optimization Model Configuration
+
+#Global Parameters
+global:
+  wh_id: 'AVP1'                      # Warehouse ID 
+  input_mode: 2                      # 1 - load from Vertica, #2 - use CSV input files (input/{filename}-manual.csv)
+  start_time: '2025-03-06 14:00:00'  # Start time of the simulation
+  end_time: '2025-03-06 14:29:00'    # End time of the simulation
+  hourly_container_target: 1380      # Hourly container target
+
+slack_calculation:
+  other_time_buffer: 30            # minutes for grooming, packing, shipping (assumed)
+  travel_time_constant: 5          # minutes per aisle (assumed)
+  aisle_crossing_factor: 20     # factor for crossing aisles vs traveling in aisles (from CAD) 
+
+  # Time-of-day capacity dictionary (0=no capacity, 1=full capacity) - Represents shift changes, breaks, lunches, etc.
+  capacity_by_hour: {
+    0: 1.0, 1: 1.0, 2: 1.0, 3: 1.0, 4: 1.0, 5: 0.0,   # Nightshift (10:00 PM - 1:30 AM, 2:00 AM - 5:00 AM)
+    6: 0.0, 7: 0.5, 8: 1.0, 9: 1.0, 10: 0.5,          # Dayshift (7:30 AM - 10:30 AM)
+    11: 1.0, 12: 1.0, 13: 1.0, 14: 1.0, 15: 0.5,      # Dayshift (11:00 AM - 3:00 PM)
+    16: 1.0, 17: 1.0, 18: 0.5,                        # Dayshift (3:30 PM - 6:00 PM)
+    19: 1.0, 20: 1.0, 21: 1.0, 22: 0.5, 23: 1.0       # Nightshift (6:30 PM - 9:30 PM, 10:00 PM - 1:30 AM)
+  }
+  critical_slack_threshold: 0
+  urgent_slack_threshold: 60
+
+
+#Tour Formation Parameters
+tour_formation:
+ 
+  tf_interval: 30                  # Interval of tour formation in minutes
+  clustering_enabled: true         # Enable clustering to decompose the problem into smaller sub-problems
+  parallel_execution: false        # Enable/disable parallel solving (future functionality - in dev.)
+  generate_visualizations: True          # Enable/disable visualization of clusters
+  min_containers_per_tour: 20      # Cmin: min. number of containers per tour
+  max_containers_per_tour: 20      # Cmax: max. number of containers per tour
+  max_cluster_size: 200            # Maximum cluster size / Max MIP Problem Size
+  max_residual_attempts: 5         # Maximum number of attempts to assign residual containers
+  early_termination_seconds: 60    # Early termination time in seconds, if the incumbent solution does not improve
+
+  weights:
+    lateness: 5                   # alpha: Weight for lateness (this will be replaced by slack weights)
+    distinct_aisles: 20           # beta: Weight for distinct aisles
+    tour_count: 1000              # gamma: Weight for minimizing number of tours
+    
+  solver:
+    mode: 'sequential'
+    max_iterations: 10
+    early_termination_seconds: 60
+    output_flag: 0                  # Output flag for solver
+    mip_gap: 0.05                   # MIP gap tolerance
+    time_limit: 1200                # Time limit in seconds
+
+#Tour Allocation Parameters
+tour_allocation:
+
+  max_pickers: 30                   # Number of available pickers
+  ta_interval: 30                     # Interval of tour formation in minutes
+  avg_cycle_time: 150               # Average cycle time in minutes
+  avg_time_to_prepare_tour: 5       # Average time to prepare a tour in minutes
+  max_buffer_spots: 15              # Maximum number of buffer spots  
+  buffer_variability_factor: 1.25   # Buffer variability factor
+
+  weights:
+    concurrency: 1.0               # Weight for aisle concurrency
+    lateness: 5.0                  # Weight for lateness in allocation
+
+  solver:
+    output_flag: 0                 # Output flag for solver
+    mip_gap: 0.01                  # MIP gap tolerance
+    time_limit: 300                # Time limit in seconds
+
+# Logging Configuration
+logging:
+
+  console_level: INFO
+  file_level: INFO
+  main_log_file: 'output/logs/pickplanning-sim.log'
+  workflow_log_dir: 'output/logs/workflows'
+  enable_workflow_logs: False
+  log_format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+
+#Database Configuration
+database:
+
+  vertica:
+    host: 'bidb.chewy.local'
+    port: 5433
+    database: 'bidb'
+    credentials_file: 'C:/Users/abhatt/cred.txt'  # Path to the encrypted credentials file - enter username

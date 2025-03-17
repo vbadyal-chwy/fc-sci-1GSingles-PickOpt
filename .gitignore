@@ -26,5 +26,5 @@ env/
 .DS_Store
 Thumbs.db
 
-/root/src/cluster_analysis/
-/root/src/cluster_analysis_residuals/
+# Ignore output folder
+output/
