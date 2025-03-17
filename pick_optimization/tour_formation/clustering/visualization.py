@@ -42,7 +42,7 @@ class Visualizer:
         self.logger = logger
         
         # Extract output path from root config
-        self.output_path = os.path.join(config.get('output', {}).get('path', 'output'), 'cluster_analysis')
+        self.output_path = os.path.join('./pick_optimization/output/', 'cluster_analysis')
         self.dpi = 300
         self.enabled = True
         

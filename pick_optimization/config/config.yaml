@@ -75,8 +75,8 @@ logging:
 
   console_level: INFO
   file_level: INFO
-  main_log_file: 'output/logs/pickplanning-sim.log'
-  workflow_log_dir: 'output/logs/workflows'
+  main_log_file: 'pick_optimization/output/logs/pickopt-sim.log'
+  workflow_log_dir: 'pick_optimization/output/logs/workflows'
   enable_workflow_logs: False
   log_format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 

@@ -5,12 +5,11 @@ This module provides the main simulation engine that orchestrates the tour forma
 and allocation subproblems over different time intervals.
 """
 
-from typing import Dict, Optional, List
+from typing import Dict, Optional
 import pandas as pd
 from datetime import datetime, timedelta
 import os
 import logging
-from tabulate import tabulate
 
 from .results import SimulationResults
 from .slack_calculator import SlackCalculator
@@ -47,7 +46,7 @@ class SimEngine:
         self.slotbook_data = None
         
         # Create output directories
-        os.makedirs('./output/iterations', exist_ok=True)
+        os.makedirs('./pick_optimization/output/iterations', exist_ok=True)
         
     def run(self, 
             container_data: pd.DataFrame, 
@@ -153,7 +152,7 @@ class SimEngine:
         
         # Save available containers for debugging
         timestamp = current_time.strftime('%Y%m%d_%H%M')
-        output_path = f'./output/iterations/available_containers_{timestamp}.csv'
+        output_path = f'./pick_optimization/output/iterations/available_containers_{timestamp}.csv'
         available_containers_with_slack.to_csv(output_path, index=False)
         
         # Run tour formation
@@ -341,7 +340,7 @@ class SimEngine:
         """
         try:
             timestamp = datetime.now().strftime('%Y%m%d_%H%M')
-            output_dir = f'./output/results/{self.config["global"]["wh_id"]}/{timestamp}'
+            output_dir = f'./pick_optimization/output/results/{self.config["global"]["wh_id"]}/{timestamp}'
             os.makedirs(output_dir, exist_ok=True)
             
             for name, df in results.items():

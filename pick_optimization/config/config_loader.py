@@ -91,17 +91,18 @@ def load_config(config_path: str) -> Dict[str, Any]:
     with open(config_path, 'r') as config_file:
         config = yaml.safe_load(config_file)
     
-    # Replace ${USER} with the actual username in the credentials file paths
-    if 'database' in config:
-        if 'vertica' in config['database'] and 'credentials_file' in config['database']['vertica']:
-            config['database']['vertica']['credentials_file'] = config['database']['vertica']['credentials_file'].replace('${USER}', os.getenv('USER', ''))
+    if config['global']['input_mode'] == '1':
+        # Replace ${USER} with the actual username in the credentials file paths
+        if 'database' in config:
+            if 'vertica' in config['database'] and 'credentials_file' in config['database']['vertica']:
+                config['database']['vertica']['credentials_file'] = config['database']['vertica']['credentials_file'].replace('${USER}', os.getenv('USER', ''))
+            
+        # Load and decrypt Vertica credentials
+        if 'database' in config and 'vertica' in config['database'] and 'credentials_file' in config['database']['vertica']:
+            username, password = get_creds(config['database']['vertica']['credentials_file'])
+            config['database']['vertica']['username'] = username
+            config['database']['vertica']['password'] = password
         
-    # Load and decrypt Vertica credentials
-    if 'database' in config and 'vertica' in config['database'] and 'credentials_file' in config['database']['vertica']:
-        username, password = get_creds(config['database']['vertica']['credentials_file'])
-        config['database']['vertica']['username'] = username
-        config['database']['vertica']['password'] = password
-    
     
     # Load Gurobi config
     gurobi_config_path = os.path.join(os.path.dirname(config_path), 'gurobi_config.yaml')

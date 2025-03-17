@@ -1,4 +1,4 @@
-#root/src/utility/setup.py
+#pick_optimization/setup.py
 
 import os
 import sys
@@ -22,8 +22,6 @@ def create_venv():
 def get_venv_python(venv_path):
     if sys.platform == "win32":
         python_path = os.path.join(venv_path, 'Scripts', 'python.exe')
-    else:
-        python_path = os.path.join(venv_path, 'bin', 'python')
     return python_path
 
 def ensure_pip(venv_python):
@@ -36,10 +34,10 @@ def ensure_pip(venv_python):
 
 def install_requirements(venv_python):
     print("Installing required packages...")
-    requirements_path = os.path.join('root', 'requirements.txt')
+    requirements_path = os.path.join('pick_optimization', 'requirements.txt')
     if not os.path.exists(requirements_path):
         print(f"Error: {requirements_path} not found.")
-        print("Please ensure the requirements.txt file exists in the 'root' directory.")
+        print("Please ensure the requirements.txt file exists in the 'pick_opimization' directory.")
         sys.exit(1)
     try:
         subprocess.check_call([venv_python, "-m", "pip", "install", "-r", requirements_path])
