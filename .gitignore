@@ -1,11 +1,14 @@
 # Ignore config files
-root/config/gurobi_config.yaml
+pick_optimization/config/gurobi_config.yaml
 
 # Ignore input / output folders
 *.csv
 
 # Ignore log files
 *.log
+
+# Ignore output folder
+output/
 
 # Python-specific ignores
 __pycache__/
@@ -26,5 +29,3 @@ env/
 .DS_Store
 Thumbs.db
 
-# Ignore output folder
-output/

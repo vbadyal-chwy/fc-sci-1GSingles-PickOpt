@@ -87,4 +87,4 @@ database:
     host: 'bidb.chewy.local'
     port: 5433
     database: 'bidb'
-    credentials_file: 'C:/Users/abhatt/cred.txt'  # Path to the encrypted credentials file - enter username
+    credentials_file: 'C:/Users/{username}/cred.txt'  # Path to the encrypted credentials file - enter username
