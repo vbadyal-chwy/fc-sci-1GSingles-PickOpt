@@ -2,7 +2,7 @@
 # pick_optimization/config/gurobi_config.yaml
 
 # Ignore input / output folders
-*.csv
+
 
 # Ignore log files
 *.log
