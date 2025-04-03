@@ -1,0 +1,13 @@
+pluginManagement {
+    repositories {
+        maven {
+            url "${artifactory_server}/plugins-release"
+            credentials {
+                username = artifactory_user
+                password = artifactory_password
+            }
+        }
+    }
+}
+
+rootProject.name = "pick-opt-solver"

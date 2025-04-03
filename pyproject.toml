@@ -1,0 +1,51 @@
+[tool.poetry]
+name = "pickOptSolver"
+version = "0.1.0"
+description = "Python starter template for new Cloud Engineering projects"
+authors = ["cloudeng <cloudengineering@chewy.com>"]
+
+[[tool.poetry.source]]
+name = "artifactory"
+url = "https://chewyinc.jfrog.io/artifactory/api/pypi/pypi-local/simple"
+secondary = true
+
+[tool.poetry.dependencies]
+python = "^3.9"
+boto3 = "^1.10.40"
+pandas = "^2.2.3"
+gurobipy = "^11.0.3"
+tabulate = "^0.9.0"
+chewtilities = "^1.5.0"
+
+[tool.poetry.dev-dependencies]
+black = "^22.3.0"
+flake8 = "^6.0.0"
+pre-commit = "^2.19.0"
+placebo = "^0.10.0"
+pytest = "^7.1.2"
+pytest-cov = "^3.0.0"
+aws-lambda-powertools = "^1.26.0"
+chewtilities = "^1.5.0"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.black]
+line-length = 88
+target-version = ['py36', 'py37', 'py38', 'py39', 'py310']
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | _build
+  | buck-out
+  | build
+  | dist
+)/
+'''
