@@ -14,7 +14,7 @@ ext {
     verticalName = 'scff'
     awsAccount = '278833423079'
     dockerRepo = "${project.ext.awsAccount}.dkr.ecr.us-east-1.amazonaws.com/${project.ext.verticalName}/${project.name}"
-    applicationName = "${project.name}".minus('-terraform')
+    applicationName = "${project.name}"
 }
 
 import com.bmuschko.gradle.docker.tasks.image.Dockerfile
