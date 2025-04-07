@@ -6,7 +6,7 @@ plugins {
 }
 
 wrapper {
-   gradleVersion = '6.2.2'
+   gradleVersion = '8.5'
    distributionUrl = "${artifactory_server}/gradle-distributions/gradle-${gradleVersion}-bin.zip"
 }
 
