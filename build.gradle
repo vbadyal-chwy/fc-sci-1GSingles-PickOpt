@@ -38,13 +38,13 @@ task recordVersion(type: Exec) {
     }
 }
 
-task terraformGet(type: Exec) {
-    workingDir "${project.projectDir}/terraform"
-    commandLine "terraform", "get"
-}
+// task terraformGet(type: Exec) {
+//     workingDir "${project.projectDir}/terraform"
+//     commandLine "terraform", "get"
+// }
 
 task copyFiles(type: Copy) {
-    dependsOn terraformGet
+    // dependsOn terraformGet
     from("${project.projectDir}") {
         include '**'
     }
