@@ -4,6 +4,7 @@
 # Ignore input / output folders
 
 
+
 # Ignore log files
 *.log
 
@@ -28,4 +29,6 @@ env/
 # OS-specific files
 .DS_Store
 Thumbs.db
+
+.gradle/
 
