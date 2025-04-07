@@ -13,7 +13,7 @@ pipeline {
 
     tools {
         jdk 'openjdk-11.0.2'
-        // used for terraform validate stage
+        // //used for terraform validate stage
         terraform 'terraform-1.0.2'
     }
 
