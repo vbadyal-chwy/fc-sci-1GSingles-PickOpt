@@ -45,6 +45,8 @@ task recordVersion(type: Exec) {
 
 task copyFiles(type: Copy) {
     // dependsOn terraformGet
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    
     from("${project.projectDir}") {
         include '**'
     }
