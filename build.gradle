@@ -50,14 +50,13 @@ task copyFiles(type: Copy) {
         include '**'
     }
 
-    from("${project.projectDir}") {
-        include 'scripts/**'
-            filter(ReplaceTokens, tokens: [verticalName: project.ext.verticalName,
-                                           applicationName: project.ext.applicationName])
-    }
+    // from("${project.projectDir}") {
+    //     include 'scripts/**'
+    //         filter(ReplaceTokens, tokens: [verticalName: project.ext.verticalName,
+    //                                        applicationName: project.ext.applicationName])
+    // }
 
-    // into "${project.buildDir}/docker/"
-    into file("$buildDir/docker")
+    into "${project.buildDir}/docker/"
 }
 
 // uses tf version v1.0.9
