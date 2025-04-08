@@ -56,7 +56,8 @@ task copyFiles(type: Copy) {
                                            applicationName: project.ext.applicationName])
     }
 
-    into "${project.buildDir}/docker/"
+    // into "${project.buildDir}/docker/"
+    into file("$buildDir/docker")
 }
 
 // uses tf version v1.0.9
