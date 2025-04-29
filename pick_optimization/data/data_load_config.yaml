@@ -1,0 +1,14 @@
+#Global Parameters
+global:
+  wh_id: 'AVP1'                      # Warehouse ID 
+  start_time: '2025-03-06 14:00:00'  # Start time of the simulation
+  end_time: '2025-03-06 15:40:00'    # End time of the simulation
+
+#Database Configuration
+database:
+
+  vertica:
+    host: 'bidb.chewy.local'
+    port: 5433
+    database: 'bidb'
+    credentials_file: 'C:/Users/{username}/cred.txt'  # Path to the encrypted credentials file - enter username

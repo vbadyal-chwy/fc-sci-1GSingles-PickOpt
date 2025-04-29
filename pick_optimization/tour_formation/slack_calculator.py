@@ -6,14 +6,20 @@ i.e. the buffer time available before a container will miss its
 critical pull time. Slack will be used to emphasize containers in our subproblems
 """
 
-from typing import Dict, Tuple
-import pandas as pd
-import numpy as np
-from datetime import datetime
-import math
+# Standard library imports
 import logging
+import math
+from datetime import datetime
+from typing import Dict, Tuple
+
+# Third-party imports
+import numpy as np
+import pandas as pd
 from scipy.stats import betaprime
 from tabulate import tabulate
+
+# Get module-specific logger
+logger = logging.getLogger(__name__)
 
 class SlackCalculator:
     """
@@ -90,7 +96,7 @@ class SlackCalculator:
         picking_time_minutes = 0
         for _, row in container_items.iterrows():
             sku_base_time = self.gamma + self.dist.rvs(random_state=self.rng)
-            quantity_factor = math.ceil(row['quantity'] / 3)
+            quantity_factor = math.ceil(row['pick_quantity'] / 3)
             picking_time_minutes += sku_base_time * quantity_factor
         return picking_time_minutes / 60
 
@@ -143,7 +149,9 @@ class SlackCalculator:
     def calculate_container_slack(self, 
                                 container_data: pd.DataFrame, 
                                 current_time: datetime,
-                                slotbook_data: pd.DataFrame) -> pd.DataFrame:
+                                slotbook_data: pd.DataFrame,
+                                labor_headcount: int,
+                                container_target: int) -> pd.DataFrame:
         """Calculate the slack time for each container."""
         try:
             self.logger.info("Calculating slack time for containers...")
@@ -159,10 +167,9 @@ class SlackCalculator:
             result_df['slack_minutes'] = 0.0
             
             # Get configuration parameters
-            hourly_container_target = self.config['global']['hourly_container_target']
-            active_pickers = self.config['tour_allocation']['max_pickers']
-            avg_cycle_time = self.config['tour_allocation']['avg_cycle_time']
-            buffer_wait_minutes = (active_pickers / avg_cycle_time) * self.config['tour_allocation']['avg_time_to_prepare_tour']
+            active_pickers = labor_headcount
+            avg_cycle_time = self.config['slack_calculation']['avg_cycle_time']
+            buffer_wait_minutes = (active_pickers / avg_cycle_time) * self.config['slack_calculation']['avg_time_to_prepare_tour']
             
             # Create lookups
             sku_aisle_lookup, sku_inventory_lookup = self._create_sku_lookups(result_df, slotbook_data)
@@ -181,7 +188,7 @@ class SlackCalculator:
                 
                 # Calculate waiting time
                 urgent_containers = pull_datetime_counts.get(pull_datetime, 0)
-                queue_wait_minutes = (urgent_containers / hourly_container_target) * 60
+                queue_wait_minutes = (urgent_containers / container_target) * 60
                 waiting_time = queue_wait_minutes + buffer_wait_minutes
                 
                 # Update result DataFrame
@@ -204,6 +211,14 @@ class SlackCalculator:
                 bins=[-float('inf'), self.CRITICAL_SLACK_THRESHOLD, self.URGENT_SLACK_THRESHOLD, float('inf')],
                 labels=['Critical', 'Urgent', 'Safe']
             )
+            
+            # Add slack weights based on the slack category
+            weight_mapping = {
+                'Critical': self.config['slack_calculation']['weights']['critical'],
+                'Urgent': self.config['slack_calculation']['weights']['urgent'],
+                'Safe': self.config['slack_calculation']['weights']['safe']
+            }
+            result_df['slack_weight'] = result_df['slack_category'].map(weight_mapping)
             
             self._log_slack_summary(result_df)
             return result_df

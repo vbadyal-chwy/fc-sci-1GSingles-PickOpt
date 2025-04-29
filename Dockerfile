@@ -8,7 +8,7 @@ LABEL maintainer="FC Science Team \"DL-FC_Science@chewy.com\""
 COPY ./pick_optimization /config/pick_optimization
 
 # Copy scripts directory to container
-COPY ./scripts /config/
+COPY ./scripts/entrypoint.bash /config/entrypoint.bash
 
 # Copy requirements.txt to root of container
 COPY ./pick_optimization/requirements.txt requirements.txt

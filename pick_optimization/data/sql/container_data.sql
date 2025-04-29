@@ -16,15 +16,16 @@ and tcp.released_date::date between '{start_time}'::date - 4 and '{start_time}':
 select distinct
          pc.wh_id,
          pc.container_id,
+         pc.priority,
          pc.arrive_date AT TIME ZONE 'America/New_York' AT TIME ZONE 'America/New_York' as arrive_datetime,
          CAST((LEFT(CAST(pc.promised_date as VARCHAR),11)||LEFT(CAST(pc.cutoff_time as VARCHAR),2)||':'||RIGHT(CAST(pc.cutoff_time as VARCHAR),2)||':00') as timestamp) 
                 AT TIME ZONE 'America/New_York' AT TIME ZONE 'America/New_York' as cut_datetime,
          pc.original_promised_pull_datetime as pull_datetime,
          pd.item_number, 
-         pd.planned_quantity as quantity, 
-         pd.pick_location as pick_location,
+         pd.planned_quantity as pick_quantity, 
+         pd.pick_location as wms_pick_location,
          right(loc.print_zone,2)::numeric(1,0) as print_zone,
-         loc.aisle_sequence as pick_aisle,
+         loc.aisle_sequence,
          loc.picking_flow_as_int,
          0 as released_flag
 from aad.t_pick_container as pc
@@ -49,15 +50,16 @@ union
 select distinct
          pc.wh_id,
          pc.container_id,
+         pc.priority,
          pc.arrive_date AT TIME ZONE 'America/New_York' AT TIME ZONE 'America/New_York' as arrive_datetime,
          CAST((LEFT(CAST(pc.promised_date as VARCHAR),11)||LEFT(CAST(pc.cutoff_time as VARCHAR),2)||':'||RIGHT(CAST(pc.cutoff_time as VARCHAR),2)||':00') as timestamp) 
                 AT TIME ZONE 'America/New_York' AT TIME ZONE 'America/New_York' as cut_datetime,
          pc.original_promised_pull_datetime as pull_datetime,
          pd.item_number, 
-         pd.planned_quantity as quantity, 
-         pd.pick_location as pick_location,
+         pd.planned_quantity as pick_quantity, 
+         pd.pick_location as wms_pick_location,
          right(loc.print_zone,2)::numeric(1,0) as print_zone,
-         loc.aisle_sequence as pick_aisle,
+         loc.aisle_sequence,
          loc.picking_flow_as_int,
          0 as released_flag
 from aad.t_pick_container as pc

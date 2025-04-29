@@ -5,12 +5,18 @@ This module handles the Gurobi model building, variables, constraints, and objec
 definition for the tour formation optimization problem.
 """
 
+# Standard library imports
+import logging
+import time
+import os
+from typing import Dict, Any, Callable, Optional
 import gurobipy as gp
 from gurobipy import GRB, Model
-import time
-from typing import Dict, Any, Callable, Optional
+import pandas as pd
 from tabulate import tabulate
-import logging
+
+# Get module-specific logger
+logger = logging.getLogger(__name__)
 
 class TourFormationModel:
     """
@@ -20,7 +26,11 @@ class TourFormationModel:
     and objective function definitions.
     """
     
-    def __init__(self, config: Dict[str, Any], model_data, logger: logging.Logger):
+    def __init__(self, config: Dict[str, Any], model_data, logger: logging.Logger, 
+                 gurobi_params: Optional[Dict[str, Any]] = None,
+                 output_dir: Optional[str] = None,
+                 cluster_id: Optional[int] = None,
+                 tour_id_offset: int = 0):
         """
         Initialize the tour formation model.
         
@@ -32,38 +42,57 @@ class TourFormationModel:
             Data object containing preprocessed model data
         logger : logging.Logger
             Logger instance
+        gurobi_params : Optional[Dict[str, Any]], optional
+            Gurobi parameters to use, by default None (uses config file values)
+        output_dir : Optional[str], optional
+            Directory to save output CSV files, by default None
+        cluster_id : Optional[int], optional
+            Identifier for the current cluster, by default None
+        tour_id_offset : int, optional
+            Offset to apply to tour IDs in the output, by default 0
         """
         self.config = config
         self.model_data = model_data
         self.logger = logger
+        self.passed_gurobi_params = gurobi_params
+        self.output_dir = output_dir
+        self.cluster_id = cluster_id
+        self.tour_id_offset = tour_id_offset
         
         # Extract parameters from config
-        self.hourly_container_target = config['global']['hourly_container_target']
         pick_config = config['tour_formation']
         self.min_containers_per_tour = pick_config['min_containers_per_tour']
         self.max_containers_per_tour = pick_config['max_containers_per_tour']
-        weights = pick_config['weights']
-        self.alpha = weights['lateness']
-        self.beta = weights['distinct_aisles']
-        self.gamma = weights['tour_count']
 
         self.early_termination_seconds = pick_config['early_termination_seconds']
-        self.max_cluster_size = pick_config['max_cluster_size']
+        self.travel_distance_weight = pick_config['travel_distance_weight']
+        self.max_cluster_size = config['clustering']['max_cluster_size']
         
-        # Gurobi configs
-        self.output_flag = pick_config['solver']['output_flag']
-        self.mip_gap = pick_config['solver']['mip_gap']
-        self.time_limit = pick_config['solver']['time_limit']
-
-        # Initialize Gurobi parameters
-        gurobi_config = self.config.get('gurobi', {})
-        self.gurobi_params = {
-            "OutputFlag": self.output_flag,
-            "GURO_PAR_ISVNAME": gurobi_config.get('ISV_NAME'),
-            "GURO_PAR_ISVAPPNAME": gurobi_config.get('APP_NAME'),
-            "GURO_PAR_ISVEXPIRATION": gurobi_config.get('EXPIRATION'),
-            "GURO_PAR_ISVKEY": gurobi_config.get('CODE')
-        }
+        # --- Gurobi Config Handling ---
+        # Use passed gurobi_params if provided, otherwise fallback to config file
+        if self.passed_gurobi_params:
+            self.gurobi_params_to_use = self.passed_gurobi_params
+            self.logger.debug("Using Gurobi parameters passed during initialization.")
+        else:
+            # Fallback: Extract Gurobi params from the main config file
+            self.logger.debug("Using Gurobi parameters from configuration file.")
+            solver_config = pick_config.get('solver', {})
+            self.output_flag = solver_config.get('output_flag', 0)
+            self.mip_gap = solver_config.get('mip_gap', 0.01)
+            self.time_limit = solver_config.get('time_limit', 60)
+            gurobi_config = self.config.get('gurobi', {})
+            self.gurobi_params_to_use = {
+                "OutputFlag": self.output_flag,
+                "MIPGap": self.mip_gap,
+                "TimeLimit": self.time_limit,
+                **{k: v for k, v in {
+                    "GURO_PAR_ISVNAME": gurobi_config.get('ISV_NAME'),
+                    "GURO_PAR_ISVAPPNAME": gurobi_config.get('APP_NAME'),
+                    "GURO_PAR_ISVEXPIRATION": gurobi_config.get('EXPIRATION'),
+                    "GURO_PAR_ISVKEY": gurobi_config.get('CODE')
+                }.items() if v is not None}
+            }
+        # -----------------------------
         
         # Initialize model and variables
         self.model = None
@@ -79,13 +108,13 @@ class TourFormationModel:
         self.v = {}  # Aggregated Aisle Visit Variables (v_{a,k})
         
         # Objective components
-        self.lateness = None
+        self.slack = None
         self.distinct_aisles = None
         self.aisle_span = None
         self.travel_distance = None
         self.tour_count = None
 
-    def build_model(self, sequential: bool = False) -> None:
+    def build_model(self) -> None:
         """
         Build the optimization model with all variables,
         constraints, and objective function.
@@ -99,11 +128,9 @@ class TourFormationModel:
         self.logger.info("Building optimization model...")
         
         try:
-            # Create Gurobi environment and model
-            self.solver_env = gp.Env(params=self.gurobi_params)
+            # Create Gurobi environment and model using the determined params
+            self.solver_env = gp.Env(params=self.gurobi_params_to_use)
             self.model = Model("TourFormation", env=self.solver_env)
-            self.model.setParam("MIPGap", self.mip_gap)
-            self.model.setParam("TimeLimit", self.time_limit)
             
             # Add variables
             self._add_variables()
@@ -269,7 +296,7 @@ class TourFormationModel:
             max_possible_tours = len(data.tour_indices)
             m.addConstr(
                 gp.quicksum(self.u[k] for k in data.tour_indices) == max_possible_tours,
-                name="max_tours"
+                name="maxtours"
             )
             # Maximum capacity for all tours
             for k in data.tour_indices:
@@ -379,7 +406,7 @@ class TourFormationModel:
         
         # Direct linking for single-location SKUs - if container is assigned to tour, fixed aisles must be visited
         for i in data.container_ids:
-            fixed_aisles = data.container_fixed_aisles.get(i, {})
+            fixed_aisles = data.container_fixed_aisles.get(i, set())
             for a in fixed_aisles:
                 for k in data.tour_indices:
                     m.addConstr(
@@ -425,10 +452,10 @@ class TourFormationModel:
 
         # Precompute potential min/max aisles for each container based on fixed aisles
         for i in data.container_ids:
-            fixed_aisles = data.container_fixed_aisles.get(i, {})
+            fixed_aisles = data.container_fixed_aisles.get(i, set())
             if fixed_aisles:
-                min_fixed = min(fixed_aisles.keys())
-                max_fixed = max(fixed_aisles.keys())
+                min_fixed = min(fixed_aisles)
+                max_fixed = max(fixed_aisles)
                 
                 for k in data.tour_indices:
                     # If container i is assigned to tour k, enforce its fixed aisle boundaries
@@ -560,16 +587,12 @@ class TourFormationModel:
         m = self.model
         data = self.model_data
         
-        # Get priority weights based on slack
-        priority_weights = getattr(data, 'priority_weights', {})
-        # Default to 1.0 if not found
-        for i in data.container_ids:
-            if i not in priority_weights:
-                priority_weights[i] = 1.0
+        # Get slack weights for containers
+        slack_weights = getattr(data, 'slack_weights', {})
     
-        # 1. Lateness component (α) with priority weights
-        self.lateness = gp.quicksum(
-            priority_weights.get(i, 0.0) * self.x[i,k]
+        # 1. Slack component (α) with slack weights
+        self.slack = gp.quicksum(
+            slack_weights.get(i, 0.0) * self.x[i,k]
             for i in data.container_ids
             for k in data.tour_indices
         )
@@ -587,16 +610,15 @@ class TourFormationModel:
         )
         
         # 2.3 Combined travel distance
-        self.travel_distance = self.beta * self.distinct_aisles + self.aisle_span
+        self.travel_distance = self.travel_distance_weight * self.distinct_aisles + self.aisle_span
         
         # 3. Tour count component (γ)
         self.tour_count = gp.quicksum(self.u[k] for k in data.tour_indices)
         
         # Set complete objective
         m.setObjective(
-            - self.lateness + 
-            self.travel_distance, # +
-            # self.gamma * self.tour_count,
+            - self.slack + 
+            self.travel_distance, 
             GRB.MINIMIZE
         )
         
@@ -663,6 +685,8 @@ class TourFormationModel:
                     return self._extract_solution()
             else:
                 self.logger.warning(f"No optimal solution found. Status: {self.model.status}")
+                if self.model.status == GRB.INFEASIBLE:
+                    self.compute_and_log_iis(self.model)
                 return None
                 
         except Exception as e:
@@ -676,21 +700,29 @@ class TourFormationModel:
         Returns
         -------
         Dict[str, Any]
-            Dictionary containing solution components
+            Dictionary containing solution components including:
+            - container_assignments: Container to tour mappings
+            - pick_assignments: Pick details for multi-location SKUs
+            - aisle_ranges: Aisle ranges for active tours
+            - metrics: Optimization metrics
+            - container_tours_df: DataFrame with container details and optimal pick locations
         """
         try:
             if sum(self.u[k].X for k in self.model_data.tour_indices) > 0:
                 # Get objective component values
-                lateness_value = self.lateness.getValue()
+                slack_value = self.slack.getValue()
                 distance_value = self.travel_distance.getValue()
                 tour_count_value = self.tour_count.getValue()
+                
+                # Get slack weights for containers
+                slack_weights = getattr(self.model_data, 'slack_weights', {})
                 
                 # Log detailed optimization results
                 self.logger.info("Tour Formation Optimization Results:")
                 self.logger.info("Component Values:")
-                self.logger.info(f"  - Slack: {lateness_value:.2f}")
-                self.logger.info(f"  - Travel Distance (beta={self.beta}): {distance_value:.2f}")
-                self.logger.info(f"  - Tour Count (gamma={self.gamma}): {tour_count_value:.2f}")
+                self.logger.info(f"  - Slack: {slack_value:.2f}")
+                self.logger.info(f"  - Travel Distance: {distance_value:.2f}")
+                self.logger.info(f"  - Tour Count: {tour_count_value:.2f}")
                 
                 # Initialize solution dictionary
                 solution = {
@@ -707,12 +739,14 @@ class TourFormationModel:
                     for k in data.tour_indices:
                         if self.x[i,k].X > 0.5:
                             solution['container_assignments'][i] = {
-                                'tour': k
+                                'tour': k + self.tour_id_offset
                             }
 
-                # Extract pick assignments for multi-location SKUs
+                # Extract pick assignments for all SKUs
                 for i in data.container_ids:
                     picks = []
+                    
+                    # Process multi-location SKUs
                     for s in data.multi_location_skus:
                         if (i,s) in data.container_sku_qty:
                             for a in data.multi_location_skus[s]:
@@ -723,24 +757,156 @@ class TourFormationModel:
                                             'aisle': a,
                                             'quantity': int(self.y[i,s,a,k].X)
                                         })
+                    
+                    # Process single-location SKUs
+                    for s in data.single_location_skus:
+                        if (i,s) in data.container_sku_qty:
+                            aisle = data.single_location_skus[s]
+                            quantity = int(data.container_sku_qty[i,s])
+                            if quantity > 0:
+                                picks.append({
+                                    'sku': s,
+                                    'aisle': aisle,
+                                    'quantity': quantity
+                                })
+                    
                     if picks:
                         solution['pick_assignments'][i] = picks
 
                 # Extract aisle ranges for active tours
                 for k in data.tour_indices:
                     if self.u[k].X > 0.5:
-                        solution['aisle_ranges'][k] = {
+                        # Calculate total slack for this tour
+                        tour_slack = sum(
+                            slack_weights.get(i, 0.0) 
+                            for i in self.model_data.container_ids 
+                            if self.x[i,k].X > 0.5
+                        )
+                        
+                        solution['aisle_ranges'][k + self.tour_id_offset] = {
                             'min_aisle': int(self.min_aisle[k].X),
-                            'max_aisle': int(self.max_aisle[k].X)
+                            'max_aisle': int(self.max_aisle[k].X),
+                            'total_slack': tour_slack
                         }
 
                 # Add metrics
                 solution['metrics'] = {
-                    'total_lateness': lateness_value,
+                    'total_slack': slack_value,
                     'total_distance': distance_value,
                     'active_tours': tour_count_value,
                     'objective_value': self.model.objVal
                 }
+
+                # Create container_tours_df with optimal pick locations
+                container_rows = []
+                
+                # Process single-location SKUs
+                for i in data.container_ids:
+                    for s in data.single_location_skus:
+                        if (i,s) in data.container_sku_qty:
+                            a = data.single_location_skus[s]
+                            tour_id = solution['container_assignments'].get(i, {}).get('tour')
+                            
+                            # Get location details from slotbook data
+                            location_info = data.slotbook_data[
+                                (data.slotbook_data['item_number'] == s) & 
+                                (data.slotbook_data['aisle_sequence'] == a)
+                            ].iloc[0] if not data.slotbook_data.empty else None
+                            
+                            container_rows.append({
+                                'container_id': i,
+                                'sku': s,
+                                'quantity': data.container_sku_qty[(i,s)],
+                                'tour_id': tour_id,
+                                'optimal_pick_location': location_info['location_id'] if location_info is not None else None,
+                                'picking_flow_as_int': location_info['picking_flow_as_int'] if location_info is not None else None
+                            })
+                
+                # Process multi-location SKUs
+                for i in data.container_ids:
+                    if i in solution['pick_assignments']:
+                        for pick in solution['pick_assignments'][i]:
+                            s = pick['sku']
+                            a = pick['aisle']
+                            tour_id = solution['container_assignments'].get(i, {}).get('tour')
+                            
+                            # Get location details from slotbook data
+                            location_info = data.slotbook_data[
+                                (data.slotbook_data['item_number'] == s) & 
+                                (data.slotbook_data['aisle_sequence'] == a)
+                            ].iloc[0] if not data.slotbook_data.empty else None
+                            
+                            container_rows.append({
+                                'container_id': i,
+                                'sku': s,
+                                'quantity': pick['quantity'],
+                                'tour_id': tour_id,
+                                'optimal_pick_location': location_info['location_id'] if location_info is not None else None,
+                                'picking_flow_as_int': location_info['picking_flow_as_int'] if location_info is not None else None
+                            })
+                
+                # Create DataFrame
+                solution['container_tours_df'] = pd.DataFrame(container_rows)
+                
+                # Add any additional columns from containers_df that aren't already included
+                if hasattr(data, 'containers_df'):
+                    additional_cols = set(data.containers_df.columns) - set(solution['container_tours_df'].columns)
+                    for col in additional_cols:
+                        solution['container_tours_df'][col] = data.containers_df[col]
+
+                # --- Save Outputs to CSV ---
+                if self.output_dir and self.cluster_id is not None:
+                    try:
+                        # Ensure output directory exists
+                        os.makedirs(self.output_dir, exist_ok=True)
+
+                        # Construct filenames with 'cluster_' prefix
+                        base_filename = f"cluster_{self.cluster_id}" 
+                        
+                        # 1. Save container_assignments
+                        assignments_list = [{'container_id': cid, 'tour_id': data['tour']}
+                                            for cid, data in solution['container_assignments'].items()]
+                        assignments_df = pd.DataFrame(assignments_list)
+                        assignments_path = os.path.join(self.output_dir, f"{base_filename}_container_assignments.csv")
+                        assignments_df.to_csv(assignments_path, index=False)
+                        self.logger.info("Saved container assignments to output directory") #: {assignments_path}")
+
+                        # 2. Save container_tours_df
+                        tours_path = os.path.join(self.output_dir, f"{base_filename}_container_tours.csv")
+                        solution['container_tours_df'].to_csv(tours_path, index=False)
+                        self.logger.info("Saved container tours details to to output directory")  #{tours_path}")
+
+                        # 3. Save pick_assignments
+                        if solution['pick_assignments']:
+                            pick_list = []
+                            for cid, picks in solution['pick_assignments'].items():
+                                for pick in picks:
+                                    pick_list.append({'container_id': cid, **pick})
+                            pick_assignments_df = pd.DataFrame(pick_list)
+                            pick_assignments_path = os.path.join(self.output_dir, f"{base_filename}_pick_assignments.csv")
+                            pick_assignments_df.to_csv(pick_assignments_path, index=False)
+                            self.logger.info("Saved pick assignments to output directory")  #{pick_assignments_path}")
+                        else:
+                            self.logger.info("No multi-location pick assignments to save.")
+
+                        # 4. Save aisle_ranges
+                        if solution['aisle_ranges']:
+                            aisle_ranges_list = [{'tour_id': tid, **ranges} 
+                                                 for tid, ranges in solution['aisle_ranges'].items()]
+                            aisle_ranges_df = pd.DataFrame(aisle_ranges_list)
+                            aisle_ranges_path = os.path.join(self.output_dir, f"{base_filename}_aisle_ranges.csv")
+                            aisle_ranges_df.to_csv(aisle_ranges_path, index=False)
+                            self.logger.info("Saved aisle ranges to output directory")  #{aisle_ranges_path}")
+                        else:
+                            self.logger.info("No aisle ranges to save.")
+
+                    except Exception as save_e:
+                        self.logger.error(f"Failed to save output CSV files for cluster {self.cluster_id}: {save_e}")
+                elif self.output_dir:
+                    self.logger.warning("Output directory provided but Cluster ID is None, skipping CSV output for this cluster.")
+                else:
+                    self.logger.warning("Output directory not provided to TourFormationModel, skipping CSV output.")
+                # -------------------------
 
                 return solution
             else:
@@ -849,7 +1015,7 @@ class TourFormationModel:
         # Group constraints by their prefix
         for c in model.getConstrs():
             if c.IISConstr:
-                self.logger.debug(f'\t{c.ConstrName}: {model.getRow(c)} {c.Sense} {c.RHS}')     
+                self.logger.info(f'\t{c.ConstrName}: {model.getRow(c)} {c.Sense} {c.RHS}')     
                
                 constraint_type = c.ConstrName.split('_')[0]
                 constraint_groups[constraint_type] = constraint_groups.get(constraint_type, 0) + 1

@@ -39,7 +39,7 @@ class TourAllocationModel:
         alloc_config = config['tour_allocation']
         weights = alloc_config['weights']
         self.concurrency_weight = weights['concurrency']
-        self.lateness_weight = weights['lateness']
+        self.slack_weight = weights['slack']
         
         # Gurobi configs
         self.output_flag = alloc_config['solver']['output_flag']
@@ -55,6 +55,9 @@ class TourAllocationModel:
             "GURO_PAR_ISVEXPIRATION": gurobi_config.get('EXPIRATION'),
             "GURO_PAR_ISVKEY": gurobi_config.get('CODE')
         }
+        
+        # Filter out None values to avoid encode errors
+        self.gurobi_params = {k: v for k, v in self.gurobi_params.items() if v is not None}
         
         self.model = None
         self.solution = None
@@ -99,7 +102,7 @@ class TourAllocationModel:
                     name=f'y_{k}_{b}'
                 )
         
-        # 2. Aisle-Buffer assignment variables (z_ab)
+        # 2. Aisle-Buffer/Picker assignment variables (z_ab)
         self.z = {}
         for a in data.aisles:
             for b in range(data.max_buffer_spots):
@@ -188,15 +191,13 @@ class TourAllocationModel:
         data = self.model_data
         
         for a in data.aisles:
-            # Concurrency definition
+            # Get base concurrency for this aisle (default to 0 if not present)
+            base_tour_count = data.aisle_concurrency.get(a, 0)
+            
+            # Concurrency definition - c[a] represents total concurrency
             m.addConstr(
-                self.c[a] >= gp.quicksum(self.z[a,b] for b in range(data.max_buffer_spots)) - 1,
+                self.c[a] == base_tour_count + gp.quicksum(self.z[a,b] for b in range(data.max_buffer_spots)) - 1,
                 name=f'concurrency_def_{a}'
-            )
-            # Non-negativity
-            m.addConstr(
-                self.c[a] >= 0,
-                name=f'concurrency_nonneg_{a}'
             )
     
          
@@ -208,17 +209,16 @@ class TourAllocationModel:
         # 1. Concurrency component
         self.concurrency = gp.quicksum(self.c[a] for a in data.aisles)
         
-        # 2. Lateness component
-        self.lateness = gp.quicksum(
-            data.tour_lateness[k] * self.y[k,b]
+        # 2. Total slack component
+        self.total_slack = gp.quicksum(
+            data.total_slack[k] * self.y[k,b]
             for k in data.tours
             for b in range(data.max_buffer_spots)
         )
         
         # Set complete objective
         m.setObjective(
-            self.concurrency_weight * self.concurrency +
-            self.lateness_weight * self.lateness,
+            - self.slack_weight * self.total_slack + self.concurrency_weight * self.concurrency,
             GRB.MINIMIZE
         )
         
@@ -300,17 +300,14 @@ class TourAllocationModel:
             
         # Calculate component values
         concurrency_value = self.concurrency.getValue()
-        lateness_value = self.lateness.getValue()
+        total_slack_value = self.total_slack.getValue()
         
         self.logger.info("Tour Allocation Results:")
         self.logger.info(f"Total Objective Value: {self.solution['objective_value']:.2f}")
         self.logger.info("\nComponent Values:")
         self.logger.info(f"  - Concurrency (alpha={self.concurrency_weight}): {concurrency_value:.2f}")
-        self.logger.info(f"  - Slack (beta={self.lateness_weight}): {lateness_value:.2f} hours")
-        self.logger.info("\nWeighted Components:")
-        #self.logger.info(f"  - Weighted Concurrency: {(self.concurrency_weight * concurrency_value):.2f}")
-        #self.logger.info(f"  - Weighted Slack: {(self.lateness_weight * lateness_value):.2f}")
-        #self.logger.info("\nAllocation Metrics:")
+        self.logger.info(f"  - Slack (beta={self.slack_weight}): {total_slack_value:.2f} hours")
+    
         self.logger.info(f"  - Total Tours Assigned: {len(self.solution['tour_assignments'])}")
         self.logger.info(f"  - Empty Buffer Spots: {self.solution['metrics']['empty_buffer_spots']} out of {self.model_data.max_buffer_spots}")
         self.logger.info(f"  - Maximum Aisle Concurrency: {self.solution['metrics']['max_concurrency']}")

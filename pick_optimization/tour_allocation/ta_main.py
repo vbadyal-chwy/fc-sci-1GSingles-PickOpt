@@ -8,13 +8,13 @@ including data loading, preprocessing, and orchestration of the solving process.
 from typing import Dict, Any, Optional
 import logging
 import pandas as pd
-from datetime import datetime
 
 from .ta_solver import TourAllocationSolver, TourAllocationResult
 
 def run_tour_allocation(
     unassigned_tours: Dict,
     tours_to_release: int,
+    pending_tours_by_aisle: pd.DataFrame,
     config: Dict[str, Any],
     logger: logging.Logger
 ) -> Optional[TourAllocationResult]:
@@ -33,6 +33,8 @@ def run_tour_allocation(
         }}
     tours_to_release : int
         Number of tours to release this iteration
+    pending_tours_by_aisle : pd.DataFrame
+        DataFrame containing pending tours by aisle
     config : Dict[str, Any]
         Configuration dictionary
     logger : logging.Logger
@@ -51,7 +53,7 @@ def run_tour_allocation(
         tours_data = _prepare_tours_data(unassigned_tours)
         
         # Run solver
-        result = solver.solve(tours_data, tours_to_release)
+        result = solver.solve(tours_data, tours_to_release, pending_tours_by_aisle)
         
         # Log final summary
         if result:
@@ -88,9 +90,11 @@ def _prepare_tours_data(unassigned_tours: Dict) -> Dict[str, pd.DataFrame]:
             'num_containers': len(tour_data['containers']),
             'num_picks': len(tour_data['picks']),
             'min_aisle': tour_data['aisle_range']['min_aisle'],
-            'max_aisle': tour_data['aisle_range']['max_aisle']
+            'max_aisle': tour_data['aisle_range']['max_aisle'],
+            'total_slack': tour_data['aisle_range']['total_slack']
         }
-        metrics.update(tour_data['metrics'])
+        if 'metrics' in tour_data:
+            metrics.update(tour_data['metrics'])
         tour_metrics_data.append(metrics)
     
     # Prepare pick assignments

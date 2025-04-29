@@ -1,16 +1,18 @@
 """
-Data preparation and preprocessing for tour formation optimization.
+Data preparation and preprocessing for tour formation MIP Model.
 
-This module handles all data preparation tasks including:
-- Container and SKU data preprocessing
-- Aisle mapping and inventory tracking
-- Model data structure creation
 """
 
-from typing import Dict, List, Tuple, Any, Set
-from dataclasses import dataclass, field
-import pandas as pd
+# Standard library imports
 import logging
+from dataclasses import dataclass, field
+from typing import Dict, List, Tuple, Any, Optional
+
+# Third-party imports
+import pandas as pd
+
+# Get module-specific logger
+logger = logging.getLogger(__name__)
 
 @dataclass
 class ModelData:
@@ -27,14 +29,16 @@ class ModelData:
     is_last_iteration: bool = True
     single_location_skus: Dict[str, int] = field(default_factory=dict)  # SKU -> unique aisle
     multi_location_skus: Dict[str, List[int]] = field(default_factory=dict)  # SKU -> list of aisles
-    container_fixed_aisles: Dict[str, Dict[int, int]] = field(default_factory=dict)  # container -> {aisle -> qty}
+    container_fixed_aisles: Dict[str, set] = field(default_factory=dict)  # container -> set of fixed aisles
+    slotbook_data: pd.DataFrame = field(default_factory=pd.DataFrame) # Add slotbook_data
+    slack_weights: Dict[str, float] = field(default_factory=dict)  # Container ID -> slack weight
 
 def prepare_model_data(
     container_data: pd.DataFrame,
     slotbook_data: pd.DataFrame,
     container_ids: List[str] = None,
     num_tours: int = None,
-    logger: logging.Logger = None
+    logger: Optional[logging.Logger] = None
 ) -> ModelData:
     """
     Prepare data structures for optimization model.
@@ -58,10 +62,11 @@ def prepare_model_data(
     ModelData
         Preprocessed data ready for model building
     """
-    if logger is None:
-        logger = logging.getLogger(__name__)
         
     try:
+        logger = logger or logging.getLogger(__name__)
+        logger.info("Preparing model data")
+        
         # Filter container data if specific container IDs provided
         if container_ids is not None:
             filtered_container_data = container_data[
@@ -71,12 +76,12 @@ def prepare_model_data(
             filtered_container_data = container_data
             
         container_ids = filtered_container_data['container_id'].unique().tolist()
-        skus = filtered_container_data['item_number'].unique().tolist()
+        skus = [sku for sku in filtered_container_data['item_number'].unique().tolist()]
         
         # Create container-SKU quantity mapping
         container_sku_qty = {}
         for _, row in filtered_container_data.iterrows():
-            container_sku_qty[(row['container_id'], row['item_number'])] = row['quantity']
+            container_sku_qty[(row['container_id'], row['item_number'])] = row['pick_quantity']
         
         # Create SKU-Aisle mapping and classify SKUs by location count
         sku_aisles = {}
@@ -101,11 +106,11 @@ def prepare_model_data(
         # Create mapping of fixed aisle requirements for each container
         container_fixed_aisles = {}
         for i in container_ids:
-            fixed_aisles = {}
+            fixed_aisles = set()  
             for s in skus:
                 if (i, s) in container_sku_qty and s in single_location_skus:
                     a = single_location_skus[s]
-                    fixed_aisles[a] = fixed_aisles.get(a, 0) + container_sku_qty[(i, s)]
+                    fixed_aisles.add(a)
             container_fixed_aisles[i] = fixed_aisles
         
         # Log optimization statistics
@@ -114,8 +119,8 @@ def prepare_model_data(
         total_skus = single_count + multi_count
         single_pct = (single_count / total_skus) * 100 if total_skus > 0 else 0
         
-        logger.debug(f"SKU Optimization: {single_count} SKUs ({single_pct:.1f}%) have single locations")
-        logger.debug(f"SKU Optimization: {multi_count} SKUs ({100-single_pct:.1f}%) have multiple locations")
+        logger.info(f"SKU Optimization: {single_count} SKUs ({single_pct:.1f}%) have single locations")
+        logger.info(f"SKU Optimization: {multi_count} SKUs ({100-single_pct:.1f}%) have multiple locations")
         
         # Compute SKU-specific aisle bounds
         sku_min_aisle = {}
@@ -130,13 +135,17 @@ def prepare_model_data(
         for _, row in slotbook_data.iterrows():
             aisle_inventory[(row['item_number'], row['aisle_sequence'])] = row['actual_qty']
         
-        # Define tour indices based on the number of tours provided or calculated
-        if num_tours is None:
-            # Default to number of containers if no specific number provided
-            num_tours = len(container_ids)
         tour_indices = list(range(num_tours))
         
         logger.info(f"Generated {len(tour_indices)} tours for {len(container_ids)} containers")
+        
+        # Create slack weights dictionary from slack_weight
+        slack_weights = {}
+        if 'slack_weight' in filtered_container_data.columns:
+            # Get one slack_weight value per container (assuming consistent values)
+            container_weights = filtered_container_data.groupby('container_id')['slack_weight'].first()
+            slack_weights = container_weights.to_dict()
+            logger.info(f"Loaded slack weights for {len(slack_weights)} containers")
         
         # Store preprocessed data
         return ModelData(
@@ -151,7 +160,9 @@ def prepare_model_data(
             max_aisle=max_aisle,
             single_location_skus=single_location_skus,
             multi_location_skus=multi_location_skus,
-            container_fixed_aisles=container_fixed_aisles
+            container_fixed_aisles=container_fixed_aisles,
+            slotbook_data=slotbook_data,
+            slack_weights=slack_weights
         )
         
     except Exception as e:

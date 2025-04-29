@@ -35,10 +35,9 @@ class FeatureProcessor:
         self.logger = logger
         
         # Extract relevant configuration
-        clustering_config = config.get('tour_formation', {})
-        self.feature_config = clustering_config.get('feature_engineering', {})
+        self.feature_config = config.get('feature_engineering', {})
         
-        # Feature weights configuration (defaults if not specified)
+        # Feature weights configuration
         self.weights = self.feature_config.get('weights', {
             'centroid': 1.0,
             'span': 0.5,
@@ -46,7 +45,7 @@ class FeatureProcessor:
         })
         
         # Use secondary feature as span or distinct aisles
-        self.use_distinct_aisles = self.feature_config.get('use_distinct_aisles', True)
+        self.use_distinct_aisles = self.feature_config.get('use_distinct_aisles', False)
         
         # Performance metrics
         self.timing_stats = {}
@@ -268,7 +267,8 @@ class FeatureProcessor:
                     # Apply feature weights
                     weighted_centroid = centroid * self.weights.get('centroid', 1.0)
                     weighted_second = (
-                        second_feature * self.weights.get('distinct_aisles' if self.use_distinct_aisles else 'span', 0.5)
+                        second_feature * self.weights.get('distinct_aisles' 
+                                                          if self.use_distinct_aisles else 'span', 0.5)
                     )
                     
                     feature_arrays.append([weighted_centroid, weighted_second])

@@ -1,4 +1,3 @@
-#pick_optimization/setup.py
 
 import os
 import sys

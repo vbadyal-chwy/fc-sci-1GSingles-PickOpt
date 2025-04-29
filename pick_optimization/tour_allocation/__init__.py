@@ -1,20 +1,22 @@
 """
-Tour allocation module for pick planning optimization.
+Tour Allocation Module
 
-This module provides functionality for allocating tours to buffer spots,
-optimizing for factors such as aisle concurrency and lateness.
+This module provides functionality for allocating tours to release.
 """
 
-from .ta_data import ModelData, prepare_model_data
+from .ta_entry import run_tour_allocation_entrypoint
 from .ta_model import TourAllocationModel
-from .ta_solver import TourAllocationSolver, TourAllocationResult
-from .ta_main import run_tour_allocation
+from .ta_solver import TourAllocationSolver
+from .tour_buffer import TourBuffer
+from .utils import ConfigManager, load_model_config
+from .ta_data import ModelData
 
 __all__ = [
-    'ModelData',
-    'prepare_model_data',
+    'run_tour_allocation_entrypoint',
     'TourAllocationModel',
+    'ModelData',
     'TourAllocationSolver',
-    'TourAllocationResult',
-    'run_tour_allocation'
+    'TourBuffer',
+    'ConfigManager',
+    'load_model_config'
 ] 

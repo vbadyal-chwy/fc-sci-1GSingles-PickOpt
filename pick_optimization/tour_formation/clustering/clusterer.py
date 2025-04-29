@@ -2,7 +2,8 @@
 Container Clustering Module
 
 This module provides the main ContainerClusterer class that orchestrates
-the container clustering process for the tour formation problem.
+the container clustering process for the tour formation problem. It supports
+writing clusters to disk for containerization.
 """
 
 import logging
@@ -10,10 +11,10 @@ from typing import Dict, List, Any, Tuple
 import pandas as pd
 import math
 import time
+import os
+from datetime import datetime
 
 
-# Import other components - in actual implementation, these would be imported
-# from their respective modules
 from .feature_processor import FeatureProcessor
 from .clustering_engine import ClusteringEngine
 from .visualization import Visualizer
@@ -26,11 +27,14 @@ class ContainerClusterer:
     This class coordinates the container clustering process, including
     critical container prioritization, feature processing, and cluster formation.
     It serves as the primary entry point for tour formation's clustering step.
+    
+    It supports running in containerized mode with the ability to write
+    cluster definitions to output directory for distributed processing.
     """
     
-    def __init__(self, config: Dict[str, Any], logger: logging.Logger):
+    def __init__(self, config: Dict[str, Any], logger: logging.Logger, output_dir: str, container_target: int):
         """
-        Initialize the ContainerClusterer with configuration and logger.
+        Initialize the ContainerClusterer with configuration, logger, and output directory.
         
         Parameters
         ----------
@@ -38,29 +42,45 @@ class ContainerClusterer:
             Configuration dictionary with clustering parameters
         logger : logging.Logger
             Logger instance for tracking progress and errors
+        output_dir : str
+            The base output directory for this run.
         """
-        # Store configuration and logger
+        # Store configuration, logger, and output directory
         self.config = config
         self.logger = logger
+        self.output_dir = output_dir # Store output directory
         
         # Extract key configuration parameters
-        self.clustering_config = config.get('tour_formation', {})
+        self.clustering_config = config.get('clustering', {})
         self.max_cluster_size = self.clustering_config['max_cluster_size']
-        self.containers_per_tour = self.clustering_config['max_containers_per_tour']
-        self.max_picking_capacity = self.config['global']['hourly_container_target']
+        self.containers_per_tour = self.config['tour_formation']['max_containers_per_tour']
+        self.max_picking_capacity = container_target
         
         # Create visualization path if needed
-        visualization_enabled = self.clustering_config['generate_visualizations']
+        visualization_enabled = self.clustering_config.get('generate_visualizations', False)
             
-        # Initialize components
+        # Initialize components, passing output_dir
         self.feature_processor = FeatureProcessor(config, logger)
-        self.clustering_engine = ClusteringEngine(config, logger)
-        self.visualizer = Visualizer(config, logger) if visualization_enabled else None
+        # Pass output_dir to ClusteringEngine
+        self.clustering_engine = ClusteringEngine(config, logger, output_dir=self.output_dir)
+        
+        # Initialize Visualizer, passing a specific subdirectory if enabled
+        if visualization_enabled:
+            vis_output_dir = os.path.join(self.output_dir, 'cluster_visualizations') 
+            self.visualizer = Visualizer(config, logger, base_output_dir=vis_output_dir)
+        else:
+            self.visualizer = None
         
         # Track timings for performance analysis
         self.timing_stats = {}
         
-    def cluster_containers(self, container_data: pd.DataFrame, slotbook_data: pd.DataFrame) -> Tuple[Dict[str, List[str]], Dict[str, int]]:
+        # Track clustering results
+        self.clusters = {}
+        self.cluster_tours = {}
+        self.cluster_metadata = {}
+        
+    def cluster_containers(self, container_data: pd.DataFrame, 
+                           slotbook_data: pd.DataFrame) -> Tuple[Dict[str, List[str]], Dict[str, int]]:
         """
         Main entry point for container clustering.
         
@@ -91,6 +111,32 @@ class ContainerClusterer:
             container_ids = container_data['container_id'].unique().tolist()
             self.logger.info(f"Processing {len(container_ids)} unique containers")
             
+            # Early return if all containers can fit in a single cluster
+            if len(container_ids) <= self.max_cluster_size:
+                self.logger.info(f"All {len(container_ids)} containers fit in a single cluster (Max Cluster Size: {self.max_cluster_size})")
+                # Create single cluster with all containers
+                single_cluster = {'1': container_ids}
+                # Calculate tours needed
+                num_tours = math.ceil(len(container_ids) / self.containers_per_tour)
+                cluster_tours = {'1': num_tours}
+                
+                # Store results for later reference
+                self.clusters = single_cluster
+                self.cluster_tours = cluster_tours
+                
+                # Create cluster metadata
+                self._create_cluster_metadata(container_data, [])
+                
+                # Log final statistics
+                total_time = time.time() - start_time
+                self.timing_stats['total_clustering_time'] = total_time
+                
+                self.logger.info(f"Container clustering completed in {total_time:.2f} seconds")
+                self.logger.info(f"Formed 1 cluster with {len(container_ids)} containers")
+                self.logger.info(f"Total tours required: {num_tours}")
+                
+                return single_cluster, cluster_tours
+            
             critical_containers = self._identify_critical_containers(container_data)
             
             # Decision branching based on critical containers
@@ -99,7 +145,9 @@ class ContainerClusterer:
             if not critical_containers or len(container_ids) <= self.max_picking_capacity:
                 self.logger.info(
                     f"Using standard clustering path: "
-                    f"{'No critical containers found' if not critical_containers else 'All containers fit within capacity'}"
+                    f"{'No critical containers found' 
+                    if not critical_containers 
+                    else 'All containers fit within capacity'}"
                 )
                 # Skip to Step 7: Form clusters from all containers
                 clusters = self._handle_standard_clustering_path(
@@ -127,6 +175,13 @@ class ContainerClusterer:
                     clusters, critical_containers, self.containers_per_tour
                 )
             
+            # Store results for later reference
+            self.clusters = clusters
+            self.cluster_tours = cluster_tours
+            
+            # Create cluster metadata
+            self._create_cluster_metadata(container_data, critical_containers)
+            
             # Log final statistics
             total_time = time.time() - start_time
             self.timing_stats['total_clustering_time'] = total_time
@@ -144,6 +199,44 @@ class ContainerClusterer:
             # Return empty dicts in case of error
             return {}, {}
     
+    def _create_cluster_metadata(self, container_data: pd.DataFrame, critical_containers: List[str]) -> None:
+        """
+        Create and store metadata for each cluster.
+        
+        Parameters
+        ----------
+        container_data : pd.DataFrame
+            DataFrame containing container information
+        critical_containers : List[str]
+            List of critical container IDs
+        """
+        self.cluster_metadata = {}
+        
+        # Calculate tour offset for each cluster
+        tour_offset = 0
+        sorted_cluster_ids = sorted(self.clusters.keys())
+        
+        for cluster_id in sorted_cluster_ids:
+            container_ids = self.clusters[cluster_id]
+            num_tours = self.cluster_tours.get(cluster_id, 0)
+            
+            # Count critical containers in this cluster
+            critical_count = sum(1 for c in container_ids if c in critical_containers)
+            
+            # Store metadata
+            self.cluster_metadata[cluster_id] = {
+                'cluster_id': cluster_id,
+                'container_count': len(container_ids),
+                'critical_container_count': critical_count,
+                'num_tours': num_tours,
+                'tour_id_offset': tour_offset,
+                'creation_timestamp': datetime.now().isoformat()
+            }
+            
+            # Update tour offset for the next cluster
+            tour_offset += num_tours
+     
+            
     def _identify_critical_containers(self, container_data: pd.DataFrame) -> List[str]:
         """
         Identify critical containers based on slack category.

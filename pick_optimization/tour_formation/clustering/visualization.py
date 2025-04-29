@@ -12,7 +12,6 @@ import numpy as np
 import os
 import time
 import matplotlib
-# Use non-interactive backend for server environments
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
@@ -27,7 +26,7 @@ class Visualizer:
     and analyze the clustering process and its results.
     """
     
-    def __init__(self, config: Dict[str, Any], logger: logging.Logger):
+    def __init__(self, config: Dict[str, Any], logger: logging.Logger, base_output_dir: str):
         """
         Initialize the Visualizer.
         
@@ -37,23 +36,32 @@ class Visualizer:
             Configuration dictionary with visualization parameters
         logger : logging.Logger
             Logger instance for tracking progress and errors
+        base_output_dir : str
+            The base directory where visualization subdirectories will be created.
         """
         self.config = config
         self.logger = logger
-        
-        # Extract output path from root config
-        self.output_path = os.path.join('./pick_optimization/output/', 'cluster_analysis')
+        self.base_output_dir = base_output_dir # Store the provided base directory
         self.dpi = 300
         self.enabled = True
         
-        # Create output directory if it doesn't exist
-        os.makedirs(self.output_path, exist_ok=True)
+        # --- Create output subdirectories relative to base_output_dir --- 
+        self.seed_clusters_path = os.path.join(self.base_output_dir, 'seed_clusters')
+        self.augmented_clusters_path = os.path.join(self.base_output_dir, 'augmented_clusters')
+        self.additional_clusters_path = os.path.join(self.base_output_dir, 'additional_clusters')
+        self.final_clusters_path = os.path.join(self.base_output_dir, 'final_clusters')
+        self.stats_path = os.path.join(self.base_output_dir, 'stats')
         
-        # Create subdirectories for different visualization types
-        os.makedirs(os.path.join(self.output_path, 'seed_clusters'), exist_ok=True)
-        os.makedirs(os.path.join(self.output_path, 'augmented_clusters'), exist_ok=True)
-        os.makedirs(os.path.join(self.output_path, 'additional_clusters'), exist_ok=True)
-        os.makedirs(os.path.join(self.output_path, 'final_clusters'), exist_ok=True)
+        # Create all directories
+        for path in [self.seed_clusters_path, self.augmented_clusters_path, 
+                     self.additional_clusters_path, self.final_clusters_path,
+                     self.stats_path]:
+            try:
+                os.makedirs(path, exist_ok=True)
+            except OSError as e:
+                self.logger.error(f"Failed to create directory {path}: {e}", exc_info=True)
+                self.enabled = False # Disable visualization if dir creation fails
+                return # Stop initialization if essential dirs can't be made
         
         # Set matplotlib style for consistent visualizations
         plt.style.use('ggplot')
@@ -65,7 +73,8 @@ class Visualizer:
                               clusters: Dict[str, List[str]],
                               container_features: Dict[str, Tuple[float, float, int]],
                               critical_containers: List[str],
-                              output_path: str = None) -> None:
+                              output_path: str = None
+                              ) -> None:
         """
         Visualize initial seed clusters.
         
@@ -89,11 +98,12 @@ class Visualizer:
             self.logger.warning("No clusters to visualize for seed clusters")
             return
             
-        if output_path is None:
-            output_path = os.path.join(self.output_path, 'seed_clusters', 'seed_clusters.png')
-        
         try:
-            self.logger.debug(f"Generating final clusters visualization: {output_path}")
+            # Use provided output path or default
+            if output_path is None:
+                output_path = os.path.join(self.seed_clusters_path, 'seed_clusters.png')
+                
+            self.logger.debug(f"Generating seed clusters visualization: {output_path}")
             
             # Create a set of critical containers for faster lookups
             critical_set = set(critical_containers)
@@ -228,15 +238,16 @@ class Visualizer:
             plt.savefig(output_path, dpi=self.dpi, bbox_inches='tight')
             plt.close()
             
-            # Generate statistics visualization
+            # Generate statistics visualization (Update its default path too)
+            stats_output_path = os.path.join(self.stats_path, 'seed_cluster_stats.png')
             self.visualize_cluster_stats(
                 clusters, 
                 critical_containers,
                 container_features,
-                os.path.join(os.path.dirname(output_path), 'final_cluster_stats.png')
+                stats_output_path
             )
             
-            self.timing_stats['visualize_final_clusters'] = time.time() - start_time
+            self.timing_stats['visualize_seed_clusters'] = time.time() - start_time
             
         except Exception as e:
             self.logger.error(f"Error visualizing final clusters: {str(e)}")
@@ -274,7 +285,8 @@ class Visualizer:
         try:
             # Use provided output path or default
             if output_path is None:
-                output_path = os.path.join(self.output_path, 'cluster_statistics.png')
+                # Default path for general stats if not specified
+                output_path = os.path.join(self.stats_path, 'general_cluster_stats.png')
                 
             self.logger.debug(f"Generating cluster statistics visualization: {output_path}")
             
@@ -326,8 +338,8 @@ class Visualizer:
             fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 12), gridspec_kw={'height_ratios': [1, 1]})
             
             # Bar colors
-            num_clusters = len(cluster_stats)
-            colors = plt.cm.tab20(np.linspace(0, 1, num_clusters))
+            #num_clusters = len(cluster_stats)
+            #colors = plt.cm.tab20(np.linspace(0, 1, num_clusters))
             
             # Plot 1: Container counts (stacked bars)
             x = range(len(cluster_stats))
@@ -370,7 +382,7 @@ class Visualizer:
             ax3 = ax2.twinx()
             
             # Plot critical percentage as bars
-            bars = ax2.bar(x, critical_pcts, color=colors, alpha=0.7)
+            # bars = ax2.bar(x, critical_pcts, color=colors, alpha=0.7)
             
             # Plot average centroid and span as lines
             avg_centroids = [stats['AvgCentroid'] for stats in cluster_stats]
@@ -501,7 +513,7 @@ class Visualizer:
         try:
             # Use provided output path or default
             if output_path is None:
-                output_path = os.path.join(self.output_path, 'augmented_clusters', 'augmented_clusters.png')
+                output_path = os.path.join(self.augmented_clusters_path, 'augmented_clusters.png')
                 
             self.logger.debug(f"Generating augmented clusters visualization: {output_path}")
             
@@ -639,11 +651,12 @@ class Visualizer:
             plt.close()
             
             # Generate statistics visualization
+            stats_output_path = os.path.join(self.stats_path, 'augmented_cluster_stats.png')
             self.visualize_cluster_stats(
                 clusters, 
                 critical_containers,
                 container_features,
-                os.path.join(os.path.dirname(output_path), 'augmented_cluster_stats.png')
+                stats_output_path
             )
             
             self.timing_stats['visualize_augmented_clusters'] = time.time() - start_time
@@ -687,7 +700,7 @@ class Visualizer:
         try:
             # Use provided output path or default
             if output_path is None:
-                output_path = os.path.join(self.output_path, 'augmented_clusters', 'cluster_comparison.png')
+                output_path = os.path.join(self.augmented_clusters_path, 'cluster_comparison.png')
                 
             self.logger.debug(f"Generating cluster comparison visualization: {output_path}")
             
@@ -860,7 +873,7 @@ class Visualizer:
             # Use provided output path or default
             if output_path is None:
                 stage = 'selected' if is_selected else 'formed'
-                output_path = os.path.join(self.output_path, 'additional_clusters', f'additional_clusters_{stage}.png')
+                output_path = os.path.join(self.additional_clusters_path, f'additional_clusters_{stage}.png')
                 
             self.logger.debug(f"Generating additional clusters visualization ({stage}): {output_path}")
             
@@ -893,7 +906,7 @@ class Visualizer:
                 return
             
             # Plot the scatter points
-            scatter = plt.scatter(centroids, spans, c=colors, alpha=0.7, s=50)
+            #scatter = plt.scatter(centroids, spans, c=colors, alpha=0.7, s=50)
             
             # Add title and labels
             stage_text = "Selected" if is_selected else "Formed"
@@ -925,7 +938,7 @@ class Visualizer:
             plt.close()
             
             # Generate cluster statistics visualization
-            stats_output_path = os.path.join(os.path.dirname(output_path), f'additional_cluster_stats_{stage}.png')
+            stats_output_path = os.path.join(self.stats_path, f'additional_cluster_stats_{stage}.png')
             
             self._visualize_cluster_sizes(
                 clusters,
@@ -986,11 +999,11 @@ class Visualizer:
             sorted_labels = [cluster_labels[i] for i in sorted_indices]
             
             # Create a colormap
-            cmap = plt.cm.get_cmap('tab20', len(sorted_labels))
-            sorted_colors = [cmap(i % len(sorted_labels)) for i in range(len(sorted_labels))]
+            #cmap = plt.cm.get_cmap('tab20', len(sorted_labels))
+            #sorted_colors = [cmap(i % len(sorted_labels)) for i in range(len(sorted_labels))]
             
             # Plot cluster sizes
-            bars = plt.bar(range(len(sorted_sizes)), sorted_sizes, color=sorted_colors)
+            #bars = plt.bar(range(len(sorted_sizes)), sorted_sizes, color=sorted_colors)
             plt.xlabel('Cluster', fontsize=12)
             plt.ylabel('Number of Containers', fontsize=12)
             plt.title('Cluster Size Distribution', fontsize=14)
@@ -1043,7 +1056,7 @@ class Visualizer:
         try:
             # Use provided output path or default
             if output_path is None:
-                output_path = os.path.join(self.output_path, 'final_clusters', 'final_clusters.png')
+                output_path = os.path.join(self.final_clusters_path, 'final_clusters.png')
                 
             self.logger.debug(f"Generating final clusters visualization: {output_path}")
             
@@ -1181,11 +1194,12 @@ class Visualizer:
             plt.close()
             
             # Generate statistics visualization
+            stats_output_path = os.path.join(self.stats_path, 'final_cluster_stats.png')
             self.visualize_cluster_stats(
                 clusters, 
                 critical_containers,
                 container_features,
-                os.path.join(os.path.dirname(output_path), 'final_cluster_stats.png')
+                stats_output_path
             )
             
             self.timing_stats['visualize_final_clusters'] = time.time() - start_time

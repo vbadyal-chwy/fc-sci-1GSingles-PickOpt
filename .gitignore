@@ -21,6 +21,7 @@ pickplan-env/
 env/
 *.venv
 .env
+*.mdc
 
 # IDE-specific files
 .vscode/

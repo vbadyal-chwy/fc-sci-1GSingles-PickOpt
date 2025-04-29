@@ -40,7 +40,8 @@ class TourAllocationSolver:
         
     def solve(self, 
               tours_data: Dict[str, pd.DataFrame],
-              tours_to_release: int) -> Optional[TourAllocationResult]:
+              tours_to_release: int,
+              pending_tours_by_aisle: pd.DataFrame) -> Optional[TourAllocationResult]:
         """
         Solve the tour allocation problem.
         
@@ -53,7 +54,8 @@ class TourAllocationSolver:
             - container_assignments: Container-tour assignments
         tours_to_release : int
             Number of tours to release this iteration
-            
+        pending_tours_by_aisle : pd.DataFrame
+            DataFrame containing pending tours by aisle
         Returns
         -------
         Optional[TourAllocationResult]
@@ -64,7 +66,7 @@ class TourAllocationSolver:
             self.config['tour_allocation']['max_buffer_spots'] = tours_to_release
             
             # Prepare data
-            model_data = prepare_model_data(tours_data, self.config, self.logger)
+            model_data = prepare_model_data(tours_data, pending_tours_by_aisle, self.config, self.logger)
             
             # Build and solve model
             model = TourAllocationModel(model_data, self.config, self.logger)
@@ -80,7 +82,7 @@ class TourAllocationSolver:
                 )
                 
                 # Generate summary
-                self._generate_summary(result)
+                self._generate_summary(result, model_data)
                 
                 return result
             else:
@@ -91,7 +93,7 @@ class TourAllocationSolver:
             self.logger.error(f"Error in tour allocation solving: {str(e)}")
             raise
             
-    def _generate_summary(self, result: TourAllocationResult) -> None:
+    def _generate_summary(self, result: TourAllocationResult, model_data: ModelData) -> None:
         """
         Generate and log summary of allocation results.
         
@@ -125,9 +127,18 @@ class TourAllocationSolver:
         aisle_summary = []
         for aisle, buffers in sorted(result.aisle_assignments.items()):
             if buffers:  # Only show aisles with assigned buffers
+                # Get pending tour count from aisle_concurrency
+                pending_tours = model_data.aisle_concurrency.get(aisle, 0)
+                # Calculate new tour count
+                new_tours = len(buffers)
+                # Calculate total tour count
+                total_tours = pending_tours + new_tours
+                
                 aisle_summary.append([
                     f"Aisle {aisle}",
-                    len(buffers),
+                    total_tours,
+                    pending_tours,
+                    new_tours,
                     ','.join(map(str, sorted(buffers)))
                 ])
         
@@ -135,7 +146,7 @@ class TourAllocationSolver:
             self.logger.info("\nAisle Concurrency Summary:")
             self.logger.info("\n" + tabulate(
                 aisle_summary,
-                headers=['Aisle', 'Buffer Count', 'Assigned Buffers'],
+                headers=['Aisle', 'Total Tours', 'Pending Tours', 'New Tours', 'New Assigned Tour IDs'],
                 tablefmt='grid'
             ))
             
@@ -165,6 +176,6 @@ class TourAllocationSolver:
         self.logger.info("\nBuffer Utilization Summary:")
         self.logger.info("\n" + tabulate(
             buffer_summary,
-            headers=['Buffer', 'Tour Count', 'Assigned Tours'],
+            headers=['Buffer', 'Tour Count', 'Assigned Tour IDs'],
             tablefmt='grid'
         ))

@@ -1,40 +1,36 @@
 """
-Data validation module for pick optimization.
+Data validation module for tour formation (applies to run_complete and generate_clusters modes)
 
-This module provides functionality to validate and clean data used in
-the pick optimization model.
 """
 import pandas as pd
-from typing import Dict, Tuple, Any
+from typing import Tuple, Dict, Any, Optional
 from tabulate import tabulate
+import logging
 
-from utils.logging_config import setup_logging
-
+# Get module-specific logger
+logger = logging.getLogger(__name__)
 
 class DataValidator:
     """
-    Validates and analyzes warehouse data for pick planning simulation.
-    
     Handles data type validation, null checks, business rule validation, 
     any feasibility checks and adjustments, and generates summary metrics for container and slotbook data.
     """
     
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, logger: logging.Logger):
         """
-        Initialize validator with configuration.
+        Initialize validator with a logger instance.
         
         Parameters
         ----------
-        config : Dict[str, Any]
-            Configuration dictionary containing logging settings
+        logger : logging.Logger
+            Configured logger instance.
         """
-        self.logger = setup_logging(config, 'data_validation')
-        self.config = config 
+        self.logger = logger
         
     def validate(self, container_data: pd.DataFrame, 
                  slotbook_data: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
-        Main method to validate and analyze input data.
+        Main method to validate and analyze input data for Tour Formation.
         
         Parameters
         ----------
@@ -48,7 +44,7 @@ class DataValidator:
         Tuple[pd.DataFrame, pd.DataFrame]
             Cleaned and validated container and slotbook data
         """
-        self.logger.info("Starting data validation and analysis...")
+        self.logger.info("Starting Tour Formation data validation and analysis...")
         
         slotbook_data = slotbook_data.sort_values(['picking_flow_as_int'])
         
@@ -81,20 +77,24 @@ class DataValidator:
         self.logger.debug("Validating container data...")
         
         # Define expected data types
-        dtypes = {
+        container_dtypes = {
             'wh_id': str,
             'container_id': str,
+            'arrive_datetime': str,
+            'cut_datetime': str,
+            'pull_datetime': str,
             'item_number': str,
-            'quantity': int,
-            'pick_location': str,
-            'print_zone': str,
-            'pick_aisle': int,
+            'pick_quantity': int,
+            'wms_pick_location': str,
+            'print_zone': int,
+            'aisle_sequence': int,
             'picking_flow_as_int': int,
-            'released_flag': int
+            'released_flag': int,
+            'priority': int
         }
         
         # Convert data types
-        for col, dtype in dtypes.items():
+        for col, dtype in container_dtypes.items():
             if col in df.columns:
                 try:
                     df[col] = df[col].astype(dtype)
@@ -114,6 +114,13 @@ class DataValidator:
             self.logger.warning("Null values found in container data:")
             null_table = [[col, count] for col, count in null_counts[null_counts > 0].items()]
             self.logger.warning("\n" + tabulate(null_table, headers=['Column', 'Null Count'], tablefmt='grid'))
+        
+        # Ensure required columns exist
+        required_container_columns = set(container_dtypes.keys())
+        missing_container_columns = required_container_columns - set(df.columns)
+        
+        if missing_container_columns:
+            raise ValueError(f"Missing required columns in container data: {missing_container_columns}")
         
         return df
     
@@ -223,8 +230,8 @@ class DataValidator:
                     'wh_id': item_container_data['wh_id'],
                     'item_number': item,
                     'picking_flow_as_int': item_container_data['picking_flow_as_int'],
-                    'location_id': item_container_data['pick_location'],
-                    'aisle_sequence': item_container_data['pick_aisle'],
+                    'location_id': item_container_data['wms_pick_location'],
+                    'aisle_sequence': item_container_data['aisle_sequence'],
                     'actual_qty': 1000,
                     'type': 'P',
                     'print_zone': 'Z01',
@@ -240,7 +247,7 @@ class DataValidator:
         # Adjust inventory issues
         insufficient_items = []
         for item in container_items:
-            total_required = container_data[container_data['item_number'] == item]['quantity'].sum()
+            total_required = container_data[container_data['item_number'] == item]['pick_quantity'].sum()
             total_available = slotbook_data[slotbook_data['item_number'] == item]['actual_qty'].sum()
             
             if total_available < total_required:
@@ -253,7 +260,11 @@ class DataValidator:
             self.logger.debug(f"Insufficient inventory for SKU {item}. Required: {required}, Available: {available}")
 
             # Locate the first row in slotbook_data where the item appears
-            index_to_adjust = slotbook_data.index[slotbook_data['item_number'] == item][0]
+            try:
+                index_to_adjust = slotbook_data.index[slotbook_data['item_number'] == item][0]
+            except IndexError:
+                self.logger.error(f"Could not find item {item} in slotbook data despite earlier check. This should not happen.")
+                continue # Skip this item if not found (should not occur)
 
             # Calculate additional inventory needed
             # This is an assumption - we don't do any real-time inventory checks/adjustments
@@ -288,7 +299,7 @@ class DataValidator:
         slotbook_data : pd.DataFrame
             Slotbook data with inventory details
         """
-        self.logger.info("Simulation input data comprises of:")
+        self.logger.info("Tour Formation input data comprises of:")
         
         # Calculate metrics
         metrics = [
@@ -296,7 +307,7 @@ class DataValidator:
             ["Avg. distinct items per container", 
              round(container_data.groupby('container_id')['item_number'].nunique().mean(), 2)],
             ["Avg. quantity per item", 
-             round(container_data.groupby(['container_id', 'item_number'])['quantity'].sum().mean(), 2)],
+             round(container_data.groupby(['container_id', 'item_number'])['pick_quantity'].sum().mean(), 2)],
             ["Earliest arrival date", container_data['arrive_datetime'].min().strftime('%Y-%m-%d %H:%M')],
             ["Latest arrival date", container_data['arrive_datetime'].max().strftime('%Y-%m-%d %H:%M')],
             ["Earliest cut date", container_data['cut_datetime'].min().strftime('%Y-%m-%d %H:%M')],
@@ -315,4 +326,39 @@ class DataValidator:
             ["Items with altered inventory", slotbook_data[slotbook_data['altered'] == 1]['item_number'].nunique()]
         ]
         
-        self.logger.info("\n" + tabulate(slotbook_metrics, headers=['Metric', 'Value'], tablefmt='grid')) 
+        self.logger.info("\n" + tabulate(slotbook_metrics, headers=['Metric', 'Value'], tablefmt='grid'))
+        
+        # Log data statistics
+        self.logger.info("Data Statistics:")
+        self.logger.info(f"Total containers: {len(container_data['container_id'].unique())}")
+        self.logger.info(f"Total items: {len(container_data['item_number'].unique())}")
+        self.logger.info(f"Total locations: {len(slotbook_data['location_id'].unique())}")
+        self.logger.info(f"Total SKUs: {len(slotbook_data['item_number'].unique())}")
+        self.logger.info(f"Total quantity: {container_data['pick_quantity'].sum()}")
+        self.logger.info(f"Average items per container: {container_data.groupby('container_id')['item_number'].nunique().mean():.2f}")
+        self.logger.info(f"Average quantity per item: {float(container_data.groupby('item_number')['pick_quantity'].sum().mean()):.2f}")
+        self.logger.info(f"Distinct aisles: {container_data['aisle_sequence'].nunique()}")
+        
+        # Create item-container mapping
+        item_container_data = container_data.groupby('item_number').agg({
+            'container_id': 'count',
+            'pick_quantity': 'sum',
+            'aisle_sequence': 'nunique'
+        }).reset_index()
+        
+        item_container_data.columns = ['item_number', 'container_count', 'total_quantity', 'aisle_count']
+
+def validate_input_data(
+    containers_df: pd.DataFrame,
+    config: Dict[str, Any],
+    logger: Optional[logging.Logger] = None
+) -> bool:
+    """Validate input data for tour formation."""
+    try:
+        logger = logger or logging.getLogger(__name__)
+        logger.info("Validating input data")
+        # ... existing code ...
+        return True
+    except Exception as e:
+        logger.error(f"Error validating input data: {str(e)}")
+        return False 

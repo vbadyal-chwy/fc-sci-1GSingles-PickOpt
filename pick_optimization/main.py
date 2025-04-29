@@ -1,110 +1,69 @@
-"""
-Main entry point for Pick Optimization Model.
-
-"""
-
-import os
 import sys
-from pathlib import Path
-
-# Import Modules
-from data.data_puller import DataPuller
-from config import load_config
-from utils.logging_config import setup_logging
-from data.data_validator import DataValidator
-from engine.sim_engine import SimEngine
+import json
+import os
+from tour_formation.tf_entry import run_tour_formation_entrypoint
+from tour_allocation.ta_entry import run_tour_allocation_entrypoint
 
 def main():
-    """Main execution function."""
-    # Determine main directory and config path
-    
-    main_dir = Path(__file__).parent
-    config_path = os.path.join(main_dir, 'config/config.yaml')
-    
-    # Load configuration
-    config = load_config(config_path)
-    
-    # Set up logging
-    logger = setup_logging(config)
-    
-    try:
-        logger.info("Starting Pick Planning Model execution")
-        
-        # Get input mode and parameters
-        input_mode = config['global']['input_mode']
-        fc = config['global']['wh_id']
-        start_time = config['global']['start_time']
-        end_time = config['global']['end_time']
-        
-        logger.info(f"Running for FC: {fc}")
-        logger.info(f"Time window: {start_time} to {end_time}")
-        
-        # Initialize data puller
-        data_puller = DataPuller(config_path, input_mode)
-        
-        # Pull required data
-        logger.info("Fetching input data...")
-        container_data = data_puller.get_container_data(fc, start_time, end_time)
-        slotbook_data = data_puller.get_slotbook_data(fc)
-        
-        # Log data statistics
-        logger.info(f"Retrieved {len(container_data)} container records")
-        logger.info(f"Retrieved {len(slotbook_data)} slotbook records")
-        
-        # Validate input data
-        validator = DataValidator(config)
-        container_data, slotbook_data = validator.validate(container_data, slotbook_data)
-        
-        # Initialize and run simulation engine
-        logger.info("Initializing simulation engine...")
-        engine = SimEngine(config)
-        
-        results = engine.run(
-            container_data=container_data,
-            slotbook_data=slotbook_data,
-            start_time=start_time,
-            end_time=end_time
-        )
-        
-        logger.info("Simulation completed successfully")
-        
-        # Log summary statistics from results
-        log_summary_statistics(results, logger)
-        
-        return 0
-    
-    except Exception as e:
-        logger.error(f"Error in Pick Planning Model execution: {str(e)}")
-        logger.exception("Stack trace:")
-        return 1
+    # if len(sys.argv) < 2:
+    #     print("Usage: python main.py '<json_params>'")
+    #     sys.exit(1)
 
-def log_summary_statistics(results, logger):
-    """Log summary statistics from simulation results."""
-    # Get consolidated results
-    consolidated = results.get_consolidated_results()
-    
-    # Log formation stats
-    if consolidated['formation_stats'] is not None:
-        formation_stats = consolidated['formation_stats']
-        total_tours = formation_stats['TotalTours'].sum()
-        total_units = formation_stats['TotalUnits'].sum()
-        logger.info(f"Total tours formed: {total_tours}")
-        logger.info(f"Total units processed: {total_units}")
-    
-    # Log allocation stats
-    if consolidated['allocation_stats'] is not None:
-        allocation_stats = consolidated['allocation_stats']
-        if 'ToursReleased' in allocation_stats.columns:
-            total_released = allocation_stats['ToursReleased'].sum()
-            logger.info(f"Total tours released: {total_released}")
-    
-    # Log buffer assignments
-    if consolidated['buffer_assignments'] is not None:
-        buffer_assignments = consolidated['buffer_assignments']
-        total_assignments = len(buffer_assignments)
-        unique_buffers = buffer_assignments['BufferSpotID'].nunique()
-        logger.info(f"Tours assigned to buffer spots: {total_assignments}")
-        logger.info(f"Unique buffer spots used: {unique_buffers}")
+    # try:
+    #     params = json.loads(sys.argv[1])
+    # except json.JSONDecodeError:
+    #     print("Invalid JSON input")
+    #     sys.exit(1)
+
+    # entry_type = params.get("entry_point_type")
+    # if entry_type == "tour_formation":
+    #     run_tour_formation_entrypoint(params)
+    # elif entry_type == "tour_allocation":
+    #     run_tour_allocation_entrypoint(params)
+    # else:
+    #     print(f"Unknown entry_point_type: {entry_type}")
+    #     sys.exit(1)
+    input_str = os.environ.get("ENTRY_PARAMS") or (sys.argv[1] if len(sys.argv) > 1 else None)
+    if not input_str:
+        print("Usage: pass JSON as env var ENTRY_PARAMS or as first argument.")
+        sys.exit(1)
+
+    try:
+        print(f"input_str: {input_str}")
+        params = json.loads(input_str)
+    except json.JSONDecodeError:
+        print("Invalid JSON input")
+        sys.exit(1)
+
+    entry_type = params.get("entry_point_type")
+    if entry_type == "tour_formation":
+        # from tour_formation.tf_entry import run_tour_formation_entrypoint
+        print(f"params: {params}")
+        entry_point_params = params.get("params")
+        run_tour_formation_entrypoint(
+            mode = entry_point_params.get("mode"),
+            fc_id=entry_point_params.get("fc_id"),
+            planning_timestamp=entry_point_params.get("planning_timestamp"),
+            input_dir=entry_point_params.get("input_dir"),
+            output_dir=entry_point_params.get("output_dir"),
+            working_dir=entry_point_params.get("working_dir"),
+            labor_headcount=entry_point_params.get("labor_headcount"),
+            cluster_id=entry_point_params.get("cluster_id")
+        )
+    elif entry_type == "tour_allocation":
+        # from tour_allocation.ta_entry import run_tour_allocation_entrypoint
+        print(f"params: {params}")
+        entry_point_params = params.get("params")
+        run_tour_allocation_entrypoint(
+            fc_id=entry_point_params.get("fc_id"),
+            planning_timestamp=entry_point_params.get("planning_timestamp"),
+            input_dir=entry_point_params.get("input_dir"),
+            output_dir=entry_point_params.get("output_dir"),
+            target_tours=entry_point_params.get("target_tours")
+        )
+    else:
+        print(f"Unknown entry_point_type: {entry_type}")
+        sys.exit(1)
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

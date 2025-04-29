@@ -1,0 +1,39 @@
+# Tour Allocation Configuration
+
+# Global Parameters
+global:
+  wh_id: 'AVP1'                      # Warehouse ID 
+
+# Model Parameters
+tour_allocation:
+  buffer_size: 10                    # Number of buffers available
+  release_threshold: 0.8             # Buffer utilization threshold for tour release
+  max_release: 5                     # Maximum number of tours to release at once
+  min_buffer_utilization: 0.3        # Minimum buffer utilization before considering release
+  max_pickers: 30                    # Number of available pickers
+  ta_interval: 30                    # Interval of tour allocation in minutes
+  avg_cycle_time: 150                # Average cycle time in minutes
+  avg_time_to_prepare_tour: 5        # Average time to prepare a tour in minutes
+  max_buffer_spots: 15               # Maximum number of buffer spots  
+  buffer_variability_factor: 1.25    # Buffer variability factor
+
+  weights:
+    concurrency: 1.0                 # Weight for aisle concurrency
+    slack: 5.0                    # Weight for slack in allocation
+  
+  solver:
+    output_flag: 0                   # Output flag for solver
+    mip_gap: 0.01                    # MIP gap tolerance
+    time_limit: 300                  # Time limit in seconds
+
+# Gurobi Settings
+gurobi:
+  LOG_FILE: 'logs/gurobi.log'
+  ISV_NAME: 'Chewy'
+  APP_NAME: 'DS'
+  EXPIRATION: 20250507
+  CODE: 'GS72JNRL' 
+
+logging: 
+  level: 'INFO'
+  format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'

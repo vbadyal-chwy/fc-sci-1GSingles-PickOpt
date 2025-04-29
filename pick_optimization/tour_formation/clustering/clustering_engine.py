@@ -14,6 +14,7 @@ import time
 import math
 from scipy.cluster.hierarchy import linkage, fcluster
 from sklearn.metrics import silhouette_score
+import os
 
 # Import feature processor
 from .feature_processor import FeatureProcessor
@@ -28,7 +29,7 @@ class ClusteringEngine:
     for critical container prioritization.
     """
     
-    def __init__(self, config: Dict[str, Any], logger: logging.Logger):
+    def __init__(self, config: Dict[str, Any], logger: logging.Logger, output_dir: str):
         """
         Initialize the ClusteringEngine.
         
@@ -38,13 +39,15 @@ class ClusteringEngine:
             Configuration dictionary with clustering parameters
         logger : logging.Logger
             Logger instance for tracking progress and errors
+        output_dir : str
+            The base output directory for this run (e.g., output/FC/Timestamp).
         """
         self.config = config
         self.logger = logger
+        self.output_dir = output_dir # Store base output dir
         
         # Extract relevant configuration
-        clustering_config = config.get('tour_formation', {})
-        self.clustering_params = clustering_config.get('clustering', {})
+        self.clustering_params = config.get('clustering', {})
         
         # Initialize feature processor
         self.feature_processor = FeatureProcessor(config, logger)
@@ -53,12 +56,12 @@ class ClusteringEngine:
         self.min_clusters = self.clustering_params.get('min_clusters', 2)
         self.max_clusters = self.clustering_params.get('max_clusters', 10)
         self.linkage_method = self.clustering_params.get('linkage_method', 'ward')
-        self.distance_metric = self.clustering_params.get('distance_metric', 'euclidean')
         self.max_subclustering_depth = self.clustering_params.get('subclustering', {}).get('max_depth', 3)
         
-        # Initialize visualizer
+        # Initialize visualizer, passing a specific subdir within output_dir
         from .visualization import Visualizer
-        self.visualizer = Visualizer(config, logger)
+        vis_output_dir = os.path.join(self.output_dir, 'cluster_visualizations')
+        self.visualizer = Visualizer(config, logger, base_output_dir=vis_output_dir)
         
         # Performance metrics
         self.timing_stats = {}
@@ -68,7 +71,7 @@ class ClusteringEngine:
                           critical_containers: List[str],
                           container_data: pd.DataFrame,
                           container_features: Dict[str, Tuple[float, float, int]],
-                          max_cluster_size: int) -> Dict[str, List[str]]:
+                          max_cluster_size: int) -> Dict[int, List[str]]:
         """
         Form initial seed clusters from critical containers.
         
@@ -85,7 +88,7 @@ class ClusteringEngine:
             
         Returns
         -------
-        Dict[str, List[str]]
+        Dict[int, List[str]]
             Dictionary mapping cluster IDs to lists of container IDs
         """
         start_time = time.time()
@@ -108,7 +111,7 @@ class ClusteringEngine:
                 # Handle case with very few critical containers
                 if len(valid_critical_containers) == 1:
                     self.logger.warning("Only one valid critical container, returning as a single cluster")
-                    return {"0": valid_critical_containers}
+                    return {0: valid_critical_containers}
                 else:
                     self.logger.error("No valid critical containers found with features")
                     return {}
@@ -133,10 +136,11 @@ class ClusteringEngine:
             Z = linkage(normalized_features, method=self.linkage_method)
             cluster_labels = fcluster(Z, optimal_clusters, criterion='maxclust')
             
-            # Map containers to clusters
-            seed_clusters = {}
+            # Map containers to clusters using integer IDs (0-based for consistency)
+            seed_clusters: Dict[int, List[str]] = {}
             for i, container_id in enumerate(valid_critical_containers):
-                cluster_id = str(int(cluster_labels[i]))
+                # Convert 1-based fcluster label to 0-based integer ID
+                cluster_id = int(cluster_labels[i]) - 1 
                 
                 if cluster_id not in seed_clusters:
                     seed_clusters[cluster_id] = []
@@ -151,20 +155,23 @@ class ClusteringEngine:
             large_clusters = {k: v for k, v in seed_clusters.items() if len(v) > max_cluster_size}
             
             if large_clusters:
-                self.logger.info(f"Found {len(large_clusters)} seed clusters exceeding max size, applying subclustering")
+                self.logger.info(f"Found {len(large_clusters)} seed clusters exceeding max size, \
+                    applying subclustering")
                 
                 # Apply subclustering
-                final_seed_clusters = {}
-                next_cluster_id = max(int(cid) for cid in seed_clusters.keys()) + 1
+                final_seed_clusters: Dict[int, List[str]] = {}
+                # Start new cluster IDs from the next available integer after initial clustering
+                next_cluster_id = max(seed_clusters.keys()) + 1
                 
                 for cluster_id, containers in seed_clusters.items():
                     if len(containers) > max_cluster_size:
                         # Apply subclustering to this cluster
-                        sub_clusters = self._apply_subclustering(
+                        sub_clusters, next_cluster_id = self._apply_subclustering(
                             containers,
                             container_features,
-                            cluster_id,
+                            cluster_id, # Pass original int ID for context
                             max_cluster_size,
+                            next_cluster_id, # Pass the counter
                             depth=0
                         )
                         
@@ -178,7 +185,7 @@ class ClusteringEngine:
             
             # Generate visualization for seed clusters
             self.visualizer.visualize_seed_clusters(
-                final_seed_clusters,
+                final_seed_clusters, # Pass dict with int keys
                 container_features,
                 critical_containers
             )
@@ -191,10 +198,9 @@ class ClusteringEngine:
             import traceback
             self.logger.error(traceback.format_exc())
             
-            # Fallback: create a single cluster with all critical containers
             if critical_containers:
                 self.logger.warning("Falling back to single seed cluster due to error")
-                return {"0": critical_containers}
+                return {0: critical_containers} # Use integer key 0
             return {}
     
     # STEP 7B: Select additional clusters
@@ -420,10 +426,10 @@ class ClusteringEngine:
             )
             
             # Extract container lists for visualization
-            final_cluster_containers = {
+            '''final_cluster_containers = {
                 cluster_id: info['containers'] 
                 for cluster_id, info in final_clusters.items()
-            }
+            }'''
             
             # Get critical containers from seed clusters
             critical_containers = []
@@ -640,111 +646,6 @@ class ClusteringEngine:
             import traceback
             self.logger.error(traceback.format_exc())
             return clusters, pd.DataFrame()
-    
-    # Standard hierarchical clustering
-    def standard_hierarchical_clustering(self, 
-                                       container_data: pd.DataFrame,
-                                       slotbook_data: pd.DataFrame,
-                                       container_ids: List[str],
-                                       max_cluster_size: int) -> Dict[str, List[str]]:
-        """
-        Standard hierarchical clustering for non-critical path.
-        
-        Parameters
-        ----------
-        container_data : pd.DataFrame
-            DataFrame containing container information
-        slotbook_data : pd.DataFrame
-            DataFrame containing slotbook information
-        container_ids : List[str]
-            List of container IDs to cluster
-        max_cluster_size : int
-            Maximum size for any cluster
-            
-        Returns
-        -------
-        Dict[str, List[str]]
-            Dictionary mapping cluster IDs to lists of container IDs
-        """
-        start_time = time.time()
-        self.logger.info(f"Running standard hierarchical clustering on {len(container_ids)} containers")
-        
-        try:
-            # Build SKU-aisle mapping
-            sku_aisle_mapping = self.feature_processor.build_sku_aisle_mapping(slotbook_data)
-            
-            # Extract features
-            container_features = self.feature_processor.extract_container_features(
-                container_data, sku_aisle_mapping, container_ids
-            )
-            
-            # Get feature matrix
-            feature_arrays = []
-            valid_containers = []
-            
-            for c_id in container_ids:
-                if c_id in container_features:
-                    centroid, span, _ = container_features[c_id]
-                    feature_arrays.append([centroid, span])
-                    valid_containers.append(c_id)
-            
-            if not valid_containers:
-                self.logger.warning("No valid containers with features")
-                return {}
-            
-            # Convert to numpy array
-            feature_matrix = np.array(feature_arrays)
-            
-            # Normalize features
-            normalized_features = self.feature_processor.normalize_features(feature_matrix)
-            
-            # Determine optimal number of clusters
-            optimal_clusters = self._determine_optimal_clusters(
-                normalized_features, 
-                self.min_clusters, 
-                self.max_clusters,
-                max_cluster_size
-            )
-            
-            self.logger.info(f"Determined optimal number of clusters: {optimal_clusters}")
-            
-            # Perform hierarchical clustering
-            Z = linkage(normalized_features, method=self.linkage_method)
-            cluster_labels = fcluster(Z, optimal_clusters, criterion='maxclust')
-            
-            # Map containers to clusters
-            clusters = {}
-            for i, container_id in enumerate(valid_containers):
-                cluster_id = str(int(cluster_labels[i]))
-                if cluster_id not in clusters:
-                    clusters[cluster_id] = []
-                clusters[cluster_id].append(container_id)
-            
-            # Apply sub-clustering for any clusters exceeding max_cluster_size
-            final_clusters = {}
-            
-            for cluster_id, containers in clusters.items():
-                if len(containers) > max_cluster_size:
-                    # Apply hierarchical sub-clustering
-                    sub_clusters = self._apply_subclustering(
-                        containers,
-                        container_features,
-                        cluster_id,
-                        max_cluster_size,
-                        depth=0
-                    )
-                    final_clusters.update(sub_clusters)
-                else:
-                    final_clusters[cluster_id] = containers
-            
-            self.timing_stats['standard_hierarchical_clustering'] = time.time() - start_time
-            return final_clusters
-            
-        except Exception as e:
-            self.logger.error(f"Error in standard hierarchical clustering: {str(e)}")
-            import traceback
-            self.logger.error(traceback.format_exc())
-            return {}
     
     # Helper method to determine optimal number of clusters
     def _determine_optimal_clusters(self, 
@@ -1136,15 +1037,15 @@ class ClusteringEngine:
     
     # STEP 6: Calculate tours
     def calculate_tours(self,
-                       clusters: Dict[str, List[str]],
+                       clusters: Dict[int, List[str]],
                        critical_containers: List[str],
-                       containers_per_tour: int) -> Dict[str, int]:
+                       containers_per_tour: int) -> Dict[int, int]:
         """
         Calculate tours for each cluster based on critical containers.
         
         Parameters
         ----------
-        clusters : Dict[str, List[str]]
+        clusters : Dict[int, List[str]]
             Dictionary mapping cluster IDs to lists of container IDs
         critical_containers : List[str]
             List of critical container IDs
@@ -1153,7 +1054,7 @@ class ClusteringEngine:
             
         Returns
         -------
-        Dict[str, int]
+        Dict[int, int]
             Dictionary mapping cluster IDs to number of tours
         """
         start_time = time.time()
@@ -1299,14 +1200,21 @@ class ClusteringEngine:
                     # Otherwise, subdivide this cluster
                     self.logger.info(f"Subdividing cluster {cluster_id} with {len(containers)} containers")
                     
+                    # Initialize cluster ID counter for first call or use the running counter
+                    current_cluster_id_counter = getattr(self, '_current_cluster_id_counter', 1)
+                    
                     # Apply subclustering
-                    sub_clusters = self._apply_subclustering(
+                    sub_clusters, updated_counter = self._apply_subclustering(
                         containers,
                         container_features,
                         cluster_id,
                         max_cluster_size,
+                        current_cluster_id_counter,
                         depth=0
                     )
+                    
+                    # Update the counter for next iterations
+                    self._current_cluster_id_counter = updated_counter
                     
                     # Process subclusters
                     for sub_id, sub_containers in sub_clusters.items():
@@ -1377,90 +1285,100 @@ class ClusteringEngine:
     def _apply_subclustering(self,
                            containers: List[str],
                            container_features: Dict[str, Tuple[float, float, int]],
-                           parent_cluster_id: str,
+                           parent_cluster_id: int,
                            max_cluster_size: int,
-                           depth: int = 0) -> Dict[str, List[str]]:
+                           current_cluster_id_counter: int,
+                           depth: int = 0) -> Tuple[Dict[int, List[str]], int]:
         """
-        Apply subclustering to break down a large cluster.
-        
+        Recursively apply subclustering to a cluster until all subclusters
+        are within the max_cluster_size limit.
+
         Parameters
         ----------
         containers : List[str]
-            List of container IDs to subcluster
+            List of container IDs in the cluster to subcluster
         container_features : Dict[str, Tuple[float, float, int]]
             Dictionary mapping container IDs to feature tuples
-        parent_cluster_id : str
-            ID of the parent cluster
+        parent_cluster_id : int
+            The ID of the parent cluster being subclustered (for context)
         max_cluster_size : int
-            Maximum size for any cluster
+            Maximum size for any subcluster
+        current_cluster_id_counter : int
+            The next available integer ID to assign to a new subcluster.
         depth : int, optional
             Current recursion depth, by default 0
-            
+
         Returns
         -------
-        Dict[str, List[str]]
-            Dictionary mapping subcluster IDs to lists of container IDs
+        Tuple[Dict[int, List[str]], int]
+            A dictionary mapping new integer cluster IDs to container lists,
+            and the updated cluster ID counter.
         """
-        # Base case: cluster is small enough or max depth reached
-        if len(containers) <= max_cluster_size or depth >= self.max_subclustering_depth or len(containers) <= 2:
-            return {f"{parent_cluster_id}": containers}
-        
-        # Get feature matrix for containers
-        feature_arrays = []
-        valid_containers = []
-        
+        if depth >= self.max_subclustering_depth:
+            self.logger.warning(
+                f"Max subclustering depth ({self.max_subclustering_depth}) reached for parent {parent_cluster_id}. "
+                f"Returning oversized cluster with {len(containers)} containers."
+            )
+            # Assign the next available ID to this oversized cluster
+            new_cluster_id = current_cluster_id_counter
+            return {new_cluster_id: containers}, current_cluster_id_counter + 1
+
+        # Prepare features for subclustering
+        sub_feature_arrays = []
+        valid_sub_containers = []
         for c_id in containers:
             if c_id in container_features:
                 centroid, span, _ = container_features[c_id]
-                feature_arrays.append([centroid, span])
-                valid_containers.append(c_id)
+                sub_feature_arrays.append([centroid, span])
+                valid_sub_containers.append(c_id)
+
+        if len(valid_sub_containers) <= 1:
+            # Cannot subcluster further, assign the next ID
+            new_cluster_id = current_cluster_id_counter
+            return {new_cluster_id: valid_sub_containers}, current_cluster_id_counter + 1
+
+        sub_feature_matrix = np.array(sub_feature_arrays)
+        normalized_sub_features = self.feature_processor.normalize_features(sub_feature_matrix)
+
+        # Determine number of clusters for subclustering (start with 2)
+        num_sub_clusters = 2
         
-        if len(valid_containers) <= 1:
-            return {f"{parent_cluster_id}": containers}
-        
-        # Convert to numpy array
-        feature_matrix = np.array(feature_arrays)
-        
-        # Normalize features
-        normalized_features = self.feature_processor.normalize_features(feature_matrix)
-        
-        # Determine optimal number of subclusters
-        estimated_clusters = max(2, len(valid_containers) // max_cluster_size + 1)
-        max_possible_clusters = min(10, len(valid_containers) // 2)
-        
-        # For subclustering, use a simpler approach to determine cluster count
-        num_subclusters = min(estimated_clusters, max_possible_clusters)
-        
-        # Perform hierarchical clustering
-        Z = linkage(normalized_features, method=self.linkage_method)
-        cluster_labels = fcluster(Z, num_subclusters, criterion='maxclust')
-        
+        # Perform clustering (start with k=2)
+        Z_sub = linkage(normalized_sub_features, method=self.linkage_method)
+        sub_cluster_labels = fcluster(Z_sub, num_sub_clusters, criterion='maxclust') # 1-based labels
+
         # Map containers to subclusters
-        subclusters = {}
-        for i, container_id in enumerate(valid_containers):
-            subcluster_idx = int(cluster_labels[i])
-            subcluster_id = f"{parent_cluster_id}_{subcluster_idx}"
-            
-            if subcluster_id not in subclusters:
-                subclusters[subcluster_id] = []
-                
-            subclusters[subcluster_id].append(container_id)
-        
-        # Check if any subcluster needs further subdivision
-        final_subclusters = {}
-        
-        for subcluster_id, subcontainers in subclusters.items():
-            if len(subcontainers) > max_cluster_size:
-                # Apply recursive subclustering
-                sub_subclusters = self._apply_subclustering(
-                    subcontainers,
+        sub_clusters_temp = {}
+        for i, container_id in enumerate(valid_sub_containers):
+            sub_label = int(sub_cluster_labels[i]) # Temporary 1-based label
+            if sub_label not in sub_clusters_temp:
+                sub_clusters_temp[sub_label] = []
+            sub_clusters_temp[sub_label].append(container_id)
+
+        # Recursively apply subclustering if needed and assign final IDs
+        final_sub_clusters: Dict[int, List[str]] = {}
+        updated_cluster_id_counter = current_cluster_id_counter
+
+        for temp_label, sub_containers in sub_clusters_temp.items():
+            if len(sub_containers) > max_cluster_size:
+                self.logger.debug(f"Recursively subclustering part of parent {parent_cluster_id} (depth {depth+1}) with {len(sub_containers)} containers")
+                # Recursively call subclustering
+                recursive_clusters, updated_cluster_id_counter = self._apply_subclustering(
+                    sub_containers,
                     container_features,
-                    subcluster_id,
+                    parent_cluster_id, # Pass parent ID for context
                     max_cluster_size,
+                    updated_cluster_id_counter, # Pass the current counter
                     depth + 1
                 )
-                final_subclusters.update(sub_subclusters)
+                final_sub_clusters.update(recursive_clusters)
+            elif sub_containers: # Only add non-empty clusters
+                # Assign the next available integer ID
+                new_cluster_id = updated_cluster_id_counter
+                final_sub_clusters[new_cluster_id] = sub_containers
+                updated_cluster_id_counter += 1
             else:
-                final_subclusters[subcluster_id] = subcontainers
-        
-        return final_subclusters
+                # Handle case of empty subcluster (should not happen with valid containers)
+                self.logger.warning(f"Empty subcluster generated for parent {parent_cluster_id} at depth {depth}")
+                
+        return final_sub_clusters, updated_cluster_id_counter
