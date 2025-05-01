@@ -143,12 +143,12 @@ class ContainerClusterer:
             start_branch_time = time.time()
             
             if not critical_containers or len(container_ids) <= self.max_picking_capacity:
-                self.logger.info(
-                    f"Using standard clustering path: "
-                    f"{'No critical containers found' 
-                    if not critical_containers 
-                    else 'All containers fit within capacity'}"
-                )
+                # self.logger.info(
+                #     f"Using standard clustering path: "
+                #     f"{'No critical containers found' 
+                #     if not critical_containers 
+                #     else 'All containers fit within capacity'}"
+                # )
                 # Skip to Step 7: Form clusters from all containers
                 clusters = self._handle_standard_clustering_path(
                     container_data, slotbook_data, container_ids
