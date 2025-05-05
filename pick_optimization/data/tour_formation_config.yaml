@@ -8,7 +8,8 @@ global:
 
 # Slack Calculation Parameters (change by FC)
 slack_calculation:
-  other_time_buffer: 30              # minutes for grooming, packing, shipping
+  buffer_variability_factor: 1.25       
+  other_time_buffer: 60              # minutes for grooming, packing, shipping
   travel_time_constant: 5            # minutes per aisle
   aisle_crossing_factor: 20          # factor for crossing aisles vs traveling in aisles
   critical_slack_threshold: 0
@@ -68,8 +69,8 @@ gurobi:
   LOG_FILE: 'logs/gurobi.log'
   ISV_NAME: 'Chewy'
   APP_NAME: 'DS'
-  EXPIRATION: 20250507
-  CODE: 'GS72JNRL'
+  EXPIRATION: 20260331
+  CODE: 'XG5VKFHH'
 
 logging: 
   level: 'INFO'

@@ -122,7 +122,7 @@ class SlackCalculator:
             
         aisles_in = len(container_aisles)
         aisles_across = max(container_aisles) - min(container_aisles) if aisles_in > 1 else 0
-        return (aisles_in + aisles_across * 1.0/self.AISLE_CROSSING_FACTOR) * self.TRAVEL_TIME_CONSTANT
+        return (aisles_in + aisles_across * (1.0/self.AISLE_CROSSING_FACTOR)) * self.TRAVEL_TIME_CONSTANT
 
     def _calculate_break_impact(self, current_time: datetime, pull_datetime: datetime) -> float:
         """Calculate break impact time."""
@@ -167,9 +167,8 @@ class SlackCalculator:
             result_df['slack_minutes'] = 0.0
             
             # Get configuration parameters
-            active_pickers = labor_headcount
-            avg_cycle_time = self.config['slack_calculation']['avg_cycle_time']
-            buffer_wait_minutes = (active_pickers / avg_cycle_time) * self.config['slack_calculation']['avg_time_to_prepare_tour']
+            buffer_wait_minutes = self.config['slack_calculation']['buffer_variability_factor'] * \
+                self.config['slack_calculation']['avg_time_to_prepare_tour']
             
             # Create lookups
             sku_aisle_lookup, sku_inventory_lookup = self._create_sku_lookups(result_df, slotbook_data)
@@ -212,6 +211,27 @@ class SlackCalculator:
                 labels=['Critical', 'Urgent', 'Safe']
             )
             
+            # Identify priority containers due today
+            priority_today_mask = (
+                (result_df['priority'] > 0) & 
+                (result_df['pull_datetime'].dt.date == current_time.date())
+            )
+            
+            # Create a container-to-category mapping to identify unique categories per container
+            container_to_category = result_df[['container_id', 'slack_category']].drop_duplicates().set_index('container_id')['slack_category']
+            
+            # Find containers that are priority, due today, and currently marked as 'Safe'
+            priority_safe_containers = result_df.loc[priority_today_mask, 'container_id'].unique()
+            # Filter to only those that are currently 'Safe'
+            priority_safe_containers = [c_id for c_id in priority_safe_containers 
+                                      if container_to_category.get(c_id) == 'Safe']
+            
+            # Update the category for these containers
+            if priority_safe_containers:
+                self.logger.info(f"Upgrading {len(priority_safe_containers)} priority containers from 'Safe' to 'Urgent'")
+                priority_safe_mask = result_df['container_id'].isin(priority_safe_containers)
+                result_df.loc[priority_safe_mask, 'slack_category'] = 'Urgent'
+            
             # Add slack weights based on the slack category
             weight_mapping = {
                 'Critical': self.config['slack_calculation']['weights']['critical'],
@@ -219,6 +239,7 @@ class SlackCalculator:
                 'Safe': self.config['slack_calculation']['weights']['safe']
             }
             result_df['slack_weight'] = result_df['slack_category'].map(weight_mapping)
+            
             
             self._log_slack_summary(result_df)
             return result_df

@@ -15,7 +15,7 @@ numpy>=1.24.0
 vertica_python>=1.0.0
 
 # Optimization
-gurobipy==11.0.0
+gurobipy>=12.0.1
 
 # Logging and configuration
 pyyaml>=6.0.0

@@ -358,7 +358,7 @@ def create_tour_allocation_inputs(
             "aisle_ranges.csv",
             "container_assignments.csv",
             "container_tours.csv",
-            "pick_assignments.csv"
+            "pick_assignments.csv",
             "pending_tours_by_aisle.csv"
         ]
 

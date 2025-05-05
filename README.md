@@ -29,7 +29,7 @@ Before setting up the project, ensure you have the following prerequisites:
 
 2. **Run the Setup Script:**
    ```bash
-   python setup.py
+   python env_setup.py
    ```
    This script creates the virtual environment `pickplan-env` and installs all required packages.
 
@@ -48,9 +48,9 @@ Before setting up the project, ensure you have the following prerequisites:
 The model can be run in two ways:
 
 1. **Using Jupyter Notebook:**
-   Open and run `main.ipynb` for an interactive experience:
+   Open and run `end_to_end_test.ipynb` for an interactive example:
    ```python
-   # The notebook provides step-by-step execution:
+   # The notebook provides step-by-step execution and testing:
    # 1. Import libraries and modules
    # 2. Load configurations
    # 3. Load and validate input data
@@ -67,26 +67,21 @@ The model can be run in two ways:
 
 ```plaintext
 pick_optimization/
-├── config/                 # Configuration files
-│   └── config.yaml         # Main configuration file
 ├── data/                   # Data handling modules
-│   ├── data_puller.py      # Data retrieval functionality
-│   └── data_validator.py   # Data validation logic
-├── engine/                # Core optimization engine
-│   └── sim_engine.py      # Sim. engine implementation
-├── input/                 # Input data directory
-├── output/                # Output results directory
 ├── tour_allocation/       # Tour allocation logic
 ├── tour_formation/        # Tour formation algorithms
-├── utils/                 # Utility functions
-├── main.ipynb            # Interactive notebook
-├── main.py               # Main script
-├── requirements.txt      # Project dependencies
-├── setup.py             # Setup script
-└── settings.json        # IDE settings
+├── end_to_end_test.ipynb # End-to-end testing notebook
+├── requirements.txt      # Project dependencies for this module
+├── env_setup.py          # Environment setup script
+├── platform_utils.py     # Platform-specific utility functions
+├── tf_test.py            # Tour formation tests
+├── ta_test.py            # Tour allocation tests
+├── main.py               # Main execution script
+├── end_to_end_test.py    # End-to-end testing script
+└── README.md             # This README file
 ```
 
 ## Output
 
-The model generates optimized tours to release in the `output/` directory.
+The model generates optimized tours.
 
