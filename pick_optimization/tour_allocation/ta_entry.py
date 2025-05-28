@@ -69,9 +69,6 @@ def run_tour_allocation_entrypoint(
             # Initialize centralized logging system
             setup_logging(config, 'tour_allocation')
             
-            # Get workflow-specific logger
-            logger = get_workflow_logger(__name__, 'tour_allocation')
-            
             logger.info(f"Loaded config using load_model_config from input_dir: {input_dir}")
         except FileNotFoundError:
             logger.error(f"Configuration file not found in {input_dir}. Exiting.")
