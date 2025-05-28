@@ -7,8 +7,9 @@ from typing import Tuple, Dict, Any, Optional
 from tabulate import tabulate
 import logging
 
-# Get module-specific logger
-logger = logging.getLogger(__name__)
+# Get module-specific logger with workflow logging
+from logging_config import get_logger
+logger = get_logger(__name__, 'tour_formation')
 
 class DataValidator:
     """

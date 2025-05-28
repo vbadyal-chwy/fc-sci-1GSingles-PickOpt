@@ -3,7 +3,6 @@ Entry point for tour allocation in containerized mode.
 """
 
 from typing import Union, Optional
-import logging
 from pathlib import Path
 from datetime import datetime
 import pandas as pd
@@ -12,11 +11,12 @@ from .utils import normalize_path, load_model_config
 from .ta_data_exchange import load_ta_input_data, write_ta_output_data
 from .ta_main import run_tour_allocation
 from .tour_buffer import TourBuffer
+from logging_config import setup_logging, get_workflow_logger
 
 # --- Entrypoint ---
 
-# Get module-specific logger
-logger = logging.getLogger(__name__)
+# Get module-specific logger - will be enhanced with workflow logging
+logger = get_workflow_logger(__name__, 'tour_allocation')
 
 def run_tour_allocation_entrypoint(
     fc_id: str,
@@ -65,6 +65,13 @@ def run_tour_allocation_entrypoint(
         # Load config from input directory using utility function
         try:
             config = load_model_config(input_dir)
+            
+            # Initialize centralized logging system
+            setup_logging(config, 'tour_allocation')
+            
+            # Get workflow-specific logger
+            logger = get_workflow_logger(__name__, 'tour_allocation')
+            
             logger.info(f"Loaded config using load_model_config from input_dir: {input_dir}")
         except FileNotFoundError:
             logger.error(f"Configuration file not found in {input_dir}. Exiting.")

@@ -10,6 +10,10 @@ import logging
 import pandas as pd
 import numpy as np
 import time
+from logging_config import get_logger
+
+# Get module-specific logger with workflow logging
+logger = get_logger(__name__, 'tour_formation')
 
 
 class FeatureProcessor:

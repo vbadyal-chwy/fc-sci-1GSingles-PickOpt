@@ -17,8 +17,9 @@ import pandas as pd
 from .tf_data import ModelData
 from .tf_model import TourFormationModel
 
-# Get module-specific logger
-logger = logging.getLogger(__name__)
+# Get module-specific logger with workflow logging
+from logging_config import get_logger
+logger = get_logger(__name__, 'tour_formation')
 
 @dataclass
 class TourFormationResult:

@@ -14,6 +14,10 @@ from gurobipy import GRB, Model
 import logging
 
 from .ta_data import ModelData
+from logging_config import get_logger
+
+# Get module-specific logger with workflow logging
+logger = get_logger(__name__, 'tour_allocation')
 
 class TourAllocationModel:
     """Optimization model for tour allocation problem."""

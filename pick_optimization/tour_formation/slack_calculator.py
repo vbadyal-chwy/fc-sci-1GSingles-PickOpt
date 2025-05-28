@@ -18,8 +18,9 @@ import pandas as pd
 from scipy.stats import betaprime
 from tabulate import tabulate
 
-# Get module-specific logger
-logger = logging.getLogger(__name__)
+# Get module-specific logger with workflow logging
+from logging_config import get_logger
+logger = get_logger(__name__, 'tour_formation')
 
 class SlackCalculator:
     """

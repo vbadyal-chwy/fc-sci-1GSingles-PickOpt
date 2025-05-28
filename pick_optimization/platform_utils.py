@@ -105,11 +105,15 @@ def create_tour_formation_inputs(
             logger.error(f"Missing required columns in container data: {missing_cols}")
             raise ValueError(f"Container data is missing required columns: {missing_cols}")
 
-
+       
         filtered_containers_df = containers_df[
             (containers_df['arrive_datetime'] <= tf_planning_timestamp) &
             (~containers_df['released_flag'].astype(bool)) # Ensure released_flag is treated as boolean
         ].copy()
+        
+        # Limit the number of rows to 400 for testing purposes  
+        #filtered_containers_df = filtered_containers_df.head(400)       #Bookmark - For testing purposes only
+        
         logger.info(f"Filtered container data: {len(filtered_containers_df)} rows remaining.")
 
         # Write filtered container data to TF input directory

@@ -10,6 +10,8 @@
 
 # Ignore output folder
 output/
+input/
+working/
 
 # Python-specific ignores
 __pycache__/
@@ -32,4 +34,6 @@ env/
 Thumbs.db
 
 .gradle/
+
+./logs
 

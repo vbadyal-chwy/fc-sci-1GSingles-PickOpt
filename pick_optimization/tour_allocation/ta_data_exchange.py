@@ -6,6 +6,10 @@ import logging
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 import pandas as pd
+from logging_config import get_logger
+
+# Get module-specific logger with workflow logging
+logger = get_logger(__name__, 'tour_allocation')
 
 def load_ta_input_data(
     input_dir: Path,

@@ -11,6 +11,10 @@ from typing import Dict, List, Tuple, Any
 from dataclasses import dataclass
 import pandas as pd
 import logging
+from logging_config import get_logger
+
+# Get module-specific logger with workflow logging
+logger = get_logger(__name__, 'tour_allocation')
 
 @dataclass
 class ModelData:
@@ -52,7 +56,7 @@ def prepare_model_data(
         Preprocessed data ready for model building
     """
     if logger is None:
-        logger = logging.getLogger(__name__)
+        logger = get_logger(__name__, 'tour_allocation')
         
     try:
         # Get active tours from tour metrics

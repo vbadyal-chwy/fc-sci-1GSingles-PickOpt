@@ -10,6 +10,10 @@ from typing import Dict, Tuple
 import math
 import numpy as np
 import logging
+from logging_config import get_logger
+
+# Get module-specific logger with workflow logging
+logger = get_logger(__name__, 'tour_allocation')
 
 class TourBuffer:
     """Manager for tour buffer calculations and release decisions."""

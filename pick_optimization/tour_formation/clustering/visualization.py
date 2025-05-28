@@ -12,10 +12,15 @@ import numpy as np
 import os
 import time
 import matplotlib
-matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.lines import Line2D
+
+from logging_config import get_logger
+
+# Get module-specific logger with workflow logging
+logger = get_logger(__name__, 'tour_formation')
+matplotlib.use('Agg')
 
 
 class Visualizer:
@@ -877,12 +882,16 @@ class Visualizer:
                 
             self.logger.debug(f"Generating additional clusters visualization ({stage}): {output_path}")
             
-            # Create the figure
-            plt.figure(figsize=(14, 10))
+            # Create the figure with adjusted size based on cluster count
+            num_clusters = len(clusters)
+            plt.figure(figsize=(16, 10))
             
             # Create a colormap with enough colors for all clusters
-            num_clusters = len(clusters)
-            cmap = plt.cm.get_cmap('tab20', num_clusters)
+            # For many clusters, use a continuous colormap to avoid too many similar colors
+            if num_clusters <= 20:
+                cmap = plt.cm.get_cmap('tab20', num_clusters)
+            else:
+                cmap = plt.cm.get_cmap('viridis', num_clusters)
             
             # Create a mapping from original cluster IDs to sequential integers for coloring
             cluster_id_to_idx = {cluster_id: i for i, cluster_id in enumerate(clusters.keys())}
@@ -891,6 +900,7 @@ class Visualizer:
             centroids = []
             spans = []
             colors = []
+            cluster_ids = []  # Store cluster ID for each point for annotation
             
             for cluster_id, container_ids in clusters.items():
                 for container_id in container_ids:
@@ -899,6 +909,7 @@ class Visualizer:
                         centroids.append(centroid)
                         spans.append(span)
                         colors.append(cmap(cluster_id_to_idx[cluster_id]))
+                        cluster_ids.append(cluster_id)
             
             # Skip if no valid containers to plot
             if not centroids:
@@ -906,7 +917,7 @@ class Visualizer:
                 return
             
             # Plot the scatter points
-            #scatter = plt.scatter(centroids, spans, c=colors, alpha=0.7, s=50)
+            scatter = plt.scatter(centroids, spans, c=colors, alpha=0.7, s=50)
             
             # Add title and labels
             stage_text = "Selected" if is_selected else "Formed"
@@ -915,25 +926,34 @@ class Visualizer:
             plt.ylabel('Aisle Span', fontsize=12)
             plt.grid(True, alpha=0.3)
             
-            # Add a legend
-            legend_elements = [
-                mpatches.Patch(facecolor=cmap(cluster_id_to_idx[cluster_id]), 
-                             edgecolor='black',
-                             alpha=0.7,
-                             label=f'Cluster {cluster_id}')
-                for cluster_id in clusters.keys()
-            ]
+            # For larger datasets, add callout to indicate cluster count
+            if num_clusters > 20:
+                plt.figtext(0.5, 0.01, 
+                          f"{num_clusters} clusters visualized (legend omitted due to size)",
+                          ha="center", fontsize=10, 
+                          bbox={"boxstyle":"round", "alpha":0.1})
             
-            plt.legend(
-                handles=legend_elements, 
-                loc='center left',
-                bbox_to_anchor=(1, 0.5),
-                fontsize=10
-            )
+            # Add a legend only for small number of clusters
+            if num_clusters <= 20:
+                # For small number of clusters, show full legend
+                legend_elements = [
+                    mpatches.Patch(facecolor=cmap(cluster_id_to_idx[cluster_id]), 
+                                 edgecolor='black',
+                                 alpha=0.7,
+                                 label=f'Cluster {cluster_id}')
+                    for cluster_id in clusters.keys()
+                ]
+                
+                plt.legend(
+                    handles=legend_elements, 
+                    loc='center left',
+                    bbox_to_anchor=(1, 0.5),
+                    fontsize=9
+                )
             
             # Save the figure
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
-            plt.tight_layout()
+            plt.tight_layout(rect=[0, 0.03, 1, 0.97])  # Adjust layout to make room for text
             plt.savefig(output_path, dpi=self.dpi, bbox_inches='tight')
             plt.close()
             
@@ -970,9 +990,6 @@ class Visualizer:
             Path to save visualization
         """
         try:
-            # Create figure
-            plt.figure(figsize=(14, 8))
-            
             # Collect statistics by cluster
             cluster_sizes = []
             cluster_avg_centroids = []
@@ -998,25 +1015,32 @@ class Visualizer:
             sorted_sizes = [cluster_sizes[i] for i in sorted_indices]
             sorted_labels = [cluster_labels[i] for i in sorted_indices]
             
-            # Create a colormap
-            #cmap = plt.cm.get_cmap('tab20', len(sorted_labels))
-            #sorted_colors = [cmap(i % len(sorted_labels)) for i in range(len(sorted_labels))]
+            # Create figure with adjusted height for many clusters
+            num_clusters = len(sorted_labels)
+            # Scale height based on number of clusters (min 8, max 24)
+            fig_height = min(max(8, num_clusters * 0.3), 24)
+            plt.figure(figsize=(14, fig_height))
             
-            # Plot cluster sizes
-            #bars = plt.bar(range(len(sorted_sizes)), sorted_sizes, color=sorted_colors)
-            plt.xlabel('Cluster', fontsize=12)
-            plt.ylabel('Number of Containers', fontsize=12)
-            plt.title('Cluster Size Distribution', fontsize=14)
-            plt.xticks(range(len(sorted_labels)), sorted_labels, rotation=90, fontsize=10)
-            plt.grid(True, axis='y', alpha=0.3)
+            # Plot horizontal bars instead of vertical for better readability with many clusters
+            bars = plt.barh(range(num_clusters), sorted_sizes, color='skyblue')
+            plt.ylabel('Cluster', fontsize=12)
+            plt.xlabel('Number of Containers', fontsize=12)
+            plt.title(f'Cluster Size Distribution ({num_clusters} clusters)', fontsize=14)
             
-            # Adding the values on top of each bar
-            for i, v in enumerate(sorted_sizes):
-                plt.text(i, v + 0.5, str(v), ha='center', fontsize=9)
+            # Adjust font size for cluster labels based on count
+            label_fontsize = max(5, min(9, 300 / num_clusters))
+            plt.yticks(range(num_clusters), sorted_labels, fontsize=label_fontsize)
+            plt.grid(True, axis='x', alpha=0.3)
+            
+            # Adding the values at the end of each bar
+            # Only add text if there aren't too many clusters
+            if num_clusters <= 50:
+                for i, v in enumerate(sorted_sizes):
+                    plt.text(v + 0.5, i, str(v), va='center', fontsize=label_fontsize)
             
             # Save the figure
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
-            plt.tight_layout()
+            plt.tight_layout(pad=2.0)  # Add extra padding
             plt.savefig(output_path, dpi=self.dpi, bbox_inches='tight')
             plt.close()
             

@@ -18,6 +18,10 @@ import os
 
 # Import feature processor
 from .feature_processor import FeatureProcessor
+from logging_config import get_logger
+
+# Get module-specific logger with workflow logging
+logger = get_logger(__name__, 'tour_formation')
 
 
 class ClusteringEngine:

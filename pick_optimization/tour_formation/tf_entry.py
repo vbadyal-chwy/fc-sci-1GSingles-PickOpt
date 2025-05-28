@@ -5,7 +5,6 @@ Handles input/output via flat files, and invokes the
 tour formation orchestrator based on the execution mode.
 """
 
-import logging
 from datetime import datetime
 from typing import Optional, Union
 from pathlib import Path
@@ -20,9 +19,10 @@ from .data_exchange import (
     normalize_path
 )
 from .utils import load_model_config
+from logging_config import setup_logging, get_workflow_logger
 
-# Get module-specific logger
-logger = logging.getLogger(__name__)
+# Get module-specific logger - will be enhanced with workflow logging
+logger = get_workflow_logger(__name__, 'tour_formation')
 
 def run_tour_formation_entrypoint(
     mode: str,
@@ -53,8 +53,14 @@ def run_tour_formation_entrypoint(
         output_dir = normalize_path(output_dir)
         working_dir = normalize_path(working_dir)
         
-        # Load config & setup logging
+        # Load config & setup centralized logging
         config = load_model_config(input_dir)
+        
+        # Initialize centralized logging system
+        setup_logging(config, 'tour_formation')
+        
+        # Get workflow-specific logger
+        logger = get_workflow_logger(__name__, 'tour_formation')
         
         
         # Validate mode

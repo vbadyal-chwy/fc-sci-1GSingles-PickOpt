@@ -34,6 +34,9 @@ gurobi:
   EXPIRATION: 20260331
   CODE: 'XG5VKFHH'
 
-logging: 
-  level: 'INFO'
-  format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+logging:
+  log_base_dir: 'data/logs'
+  console_level: 'INFO'
+  file_level: 'DEBUG'
+  console_format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+  file_format: '%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s' 

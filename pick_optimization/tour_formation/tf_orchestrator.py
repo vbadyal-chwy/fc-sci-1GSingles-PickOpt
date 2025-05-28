@@ -20,8 +20,9 @@ from .clustering.clusterer import ContainerClusterer
 from .tf_data_validator import DataValidator
 from .data_exchange import load_cached_containers_with_slack, write_cached_containers_with_slack
 
-# Get module-specific logger
-logger = logging.getLogger(__name__)
+# Get module-specific logger with workflow logging
+from logging_config import get_logger
+logger = get_logger(__name__, 'tour_formation')
 
 def calculate_average_upc(containers_df: pd.DataFrame, logger: logging.Logger) -> float:
     """

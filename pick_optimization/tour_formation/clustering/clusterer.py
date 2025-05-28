@@ -14,10 +14,13 @@ import time
 import os
 from datetime import datetime
 
-
 from .feature_processor import FeatureProcessor
 from .clustering_engine import ClusteringEngine
 from .visualization import Visualizer
+from logging_config import get_logger
+
+# Get module-specific logger with workflow logging
+logger = get_logger(__name__, 'tour_formation')
 
 
 class ContainerClusterer:
