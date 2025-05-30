@@ -9,6 +9,7 @@ critical pull time. Slack will be used to emphasize containers in our subproblem
 # Standard library imports
 import logging
 import math
+import time
 from datetime import datetime
 from typing import Dict, Tuple
 
@@ -77,20 +78,108 @@ class SlackCalculator:
         self.rng = np.random.RandomState(42)
         
     def _create_sku_lookups(self, result_df: pd.DataFrame, slotbook_data: pd.DataFrame) -> Tuple[Dict, Dict]:
-        """Create lookup tables for SKU aisles and inventory levels."""
-        sku_aisle_lookup = {}
-        sku_inventory_lookup = {}
+        """Create lookup tables for SKU aisles and inventory levels using optimized vectorized operations."""
+        # Get unique SKUs from result_df to process only what's needed
+        required_skus = result_df['item_number'].unique()
         
-        for sku in result_df['item_number'].unique():
-            sku_data = slotbook_data[slotbook_data['item_number'] == sku]
-            sku_aisles = sku_data['aisle_sequence'].unique()
-            sku_aisle_lookup[sku] = sku_aisles
-            
-            for aisle in sku_aisles:
-                inventory = sku_data[sku_data['aisle_sequence'] == aisle]['actual_qty'].sum()
-                sku_inventory_lookup[(sku, aisle)] = inventory
+        # Filter slotbook to only required SKUs for efficiency
+        filtered_slotbook = slotbook_data[slotbook_data['item_number'].isin(required_skus)]
+        
+        # Create SKU-aisle mapping using groupby (vectorized)
+        sku_aisle_lookup = (
+            filtered_slotbook.groupby('item_number')['aisle_sequence']
+            .apply(lambda x: x.unique().tolist())
+            .to_dict()
+        )
+        
+        # Create SKU-inventory lookup using vectorized operations
+        inventory_agg = (
+            filtered_slotbook.groupby(['item_number', 'aisle_sequence'])['actual_qty']
+            .sum()
+            .reset_index()
+        )
+        
+        sku_inventory_lookup = {
+            (row['item_number'], row['aisle_sequence']): row['actual_qty']
+            for _, row in inventory_agg.iterrows()
+        }
                 
         return sku_aisle_lookup, sku_inventory_lookup
+
+    def _calculate_picking_times_vectorized(self, container_data: pd.DataFrame) -> pd.DataFrame:
+        """Calculate picking times for all containers using vectorized operations."""
+        # Generate random values for all rows at once for efficiency
+        num_rows = len(container_data)
+        random_values = self.dist.rvs(size=num_rows, random_state=self.rng)
+        
+        # Vectorized calculation of picking times
+        container_data = container_data.copy()
+        container_data['sku_base_time'] = self.gamma + random_values
+        container_data['quantity_factor'] = np.ceil(container_data['pick_quantity'] / 3)
+        container_data['item_picking_time'] = container_data['sku_base_time'] * container_data['quantity_factor']
+        
+        # Sum by container
+        picking_times = (
+            container_data.groupby('container_id')['item_picking_time']
+            .sum()
+            .reset_index()
+        )
+        picking_times['picking_time'] = picking_times['item_picking_time'] / 60  # Convert to hours
+        picking_times = picking_times[['container_id', 'picking_time']]
+        
+        return picking_times
+
+    def _calculate_travel_times_vectorized(self, container_data: pd.DataFrame, sku_aisle_lookup: Dict, sku_inventory_lookup: Dict) -> pd.DataFrame:
+        """Calculate travel times for all containers using vectorized operations."""
+        travel_times = []
+        
+        for container_id, container_items in container_data.groupby('container_id'):
+            container_aisles = set()
+            
+            for _, row in container_items.iterrows():
+                sku = row['item_number']
+                sku_aisles = sku_aisle_lookup.get(sku, [])
+                
+                if len(sku_aisles) == 1:
+                    container_aisles.add(sku_aisles[0])
+                elif len(sku_aisles) > 1:
+                    best_aisle = max(
+                        [(aisle, sku_inventory_lookup.get((sku, aisle), 0)) 
+                         for aisle in sku_aisles],
+                        key=lambda x: x[1]
+                    )[0]
+                    container_aisles.add(best_aisle)
+            
+            if container_aisles:
+                aisles_in = len(container_aisles)
+                aisles_across = max(container_aisles) - min(container_aisles) if aisles_in > 1 else 0
+                travel_time = (aisles_in + aisles_across * (1.0/self.AISLE_CROSSING_FACTOR)) * self.TRAVEL_TIME_CONSTANT
+            else:
+                travel_time = 0
+                
+            travel_times.append({'container_id': container_id, 'travel_time': travel_time})
+        
+        return pd.DataFrame(travel_times)
+
+    def _calculate_break_impacts_vectorized(self, container_data: pd.DataFrame, current_time: datetime) -> pd.DataFrame:
+        """Calculate break impacts for all containers using vectorized operations."""
+        # Get unique pull datetimes to avoid redundant calculations
+        unique_pull_times = container_data['pull_datetime'].unique()
+        
+        # Calculate break impact for each unique pull time
+        break_impact_lookup = {}
+        for pull_datetime in unique_pull_times:
+            break_impact_lookup[pull_datetime] = self._calculate_break_impact(current_time, pull_datetime)
+        
+        # Map break impacts to containers
+        break_impacts = (
+            container_data[['container_id', 'pull_datetime']]
+            .drop_duplicates()
+            .copy()
+        )
+        break_impacts['break_impact'] = break_impacts['pull_datetime'].map(break_impact_lookup)
+        
+        return break_impacts[['container_id', 'break_impact']]
 
     def _calculate_picking_time(self, container_items: pd.DataFrame) -> float:
         """Calculate picking time for a container."""
@@ -153,58 +242,112 @@ class SlackCalculator:
                                 slotbook_data: pd.DataFrame,
                                 labor_headcount: int,
                                 container_target: int) -> pd.DataFrame:
-        """Calculate the slack time for each container."""
+        """Calculate the slack time for each container using optimized vectorized operations."""
         try:
+            start_time = time.time()
             self.logger.info("Calculating slack time for containers...")
-            result_df = container_data.copy()
             
-            # Initialize time components
-            result_df['time_until_pull'] = 0.0
-            result_df['waiting_time'] = 0.0
-            result_df['picking_time'] = 0.0
-            result_df['travel_time'] = 0.0
+            # Initialize result DataFrame
+            result_df = container_data.copy()
             result_df['other_time'] = self.OTHER_TIME_BUFFER
-            result_df['break_impact'] = 0.0
-            result_df['slack_minutes'] = 0.0
+            
+            # Phase 1: Vectorized time until pull calculation
+            time_calc_start = time.time()
+            result_df['time_until_pull'] = (result_df['pull_datetime'] - current_time).dt.total_seconds() / 60
+            result_df['time_until_pull'] = result_df['time_until_pull'].clip(lower=0)
+            time_calc_time = time.time() - time_calc_start
+            
+            # Phase 2: Pre-compute lookups and waiting times
+            lookup_start = time.time()
             
             # Get configuration parameters
             buffer_wait_minutes = self.config['slack_calculation']['buffer_variability_factor'] * \
                 self.config['slack_calculation']['avg_time_to_prepare_tour']
             
-            # Create lookups
+            # Create optimized lookups
             sku_aisle_lookup, sku_inventory_lookup = self._create_sku_lookups(result_df, slotbook_data)
-            pull_datetime_counts = container_data.groupby('pull_datetime')['container_id'].nunique().cumsum()
             
-            # Process each container
-            for container_id, container_items in result_df.groupby('container_id'):
-                container_mask = result_df['container_id'] == container_id
-                pull_datetime = container_items['pull_datetime'].iloc[0]
-                
-                # Calculate components
-                time_until_pull = max(0, (pull_datetime - current_time).total_seconds() / 60)
-                picking_time = self._calculate_picking_time(container_items)
-                travel_time = self._calculate_travel_time(container_items, sku_aisle_lookup, sku_inventory_lookup)
-                break_impact = self._calculate_break_impact(current_time, pull_datetime)
-                
-                # Calculate waiting time
-                urgent_containers = pull_datetime_counts.get(pull_datetime, 0)
+            # Pre-compute waiting times using vectorized operations
+            pull_datetime_counts = container_data.groupby('pull_datetime')['container_id'].nunique()
+            waiting_time_lookup = {}
+            for pull_datetime, urgent_containers in pull_datetime_counts.items():
                 queue_wait_minutes = (urgent_containers / container_target) * 60
-                waiting_time = queue_wait_minutes + buffer_wait_minutes
-                
-                # Update result DataFrame
-                result_df.loc[container_mask, 'time_until_pull'] = time_until_pull
-                result_df.loc[container_mask, 'picking_time'] = picking_time
-                result_df.loc[container_mask, 'travel_time'] = travel_time
-                result_df.loc[container_mask, 'break_impact'] = break_impact
-                result_df.loc[container_mask, 'waiting_time'] = waiting_time
-                
-                # Calculate slack
-                total_processing_time = (
-                    picking_time + travel_time + self.OTHER_TIME_BUFFER + 
-                    break_impact + waiting_time
-                )
-                result_df.loc[container_mask, 'slack_minutes'] = time_until_pull - total_processing_time
-                
+                waiting_time_lookup[pull_datetime] = queue_wait_minutes + buffer_wait_minutes
+            
+            lookup_time = time.time() - lookup_start
+            
+            # Phase 3: Vectorized component calculations
+            components_start = time.time()
+            
+            # Calculate picking times for all containers
+            picking_times_df = self._calculate_picking_times_vectorized(container_data)
+            
+            # Calculate travel times for all containers
+            travel_times_df = self._calculate_travel_times_vectorized(container_data, sku_aisle_lookup, sku_inventory_lookup)
+            
+            # Calculate break impacts for all containers
+            break_impacts_df = self._calculate_break_impacts_vectorized(container_data, current_time)
+            
+            components_time = time.time() - components_start
+            
+            # Phase 4: Merge all components efficiently
+            merge_start = time.time()
+            
+            # Get container-level data (one row per container)
+            container_level = result_df[['container_id', 'pull_datetime']].drop_duplicates()
+            
+            # Add waiting times
+            container_level['waiting_time'] = container_level['pull_datetime'].map(waiting_time_lookup)
+            
+            # Merge all time components
+            container_level = container_level.merge(picking_times_df, on='container_id', how='left')
+            container_level = container_level.merge(travel_times_df, on='container_id', how='left')
+            container_level = container_level.merge(break_impacts_df, on='container_id', how='left')
+            
+            # Fill any missing values with 0
+            time_columns = ['picking_time', 'travel_time', 'break_impact', 'waiting_time']
+            for col in time_columns:
+                container_level[col] = container_level[col].fillna(0)
+            
+            merge_time = time.time() - merge_start
+            
+            # Phase 5: Vectorized slack calculation
+            slack_calc_start = time.time()
+            
+            # Calculate total processing time vectorized
+            container_level['total_processing_time'] = (
+                container_level['picking_time'] + 
+                container_level['travel_time'] + 
+                self.OTHER_TIME_BUFFER + 
+                container_level['break_impact'] + 
+                container_level['waiting_time']
+            )
+            
+            # Get time until pull for containers
+            container_time_until_pull = result_df[['container_id', 'time_until_pull']].drop_duplicates()
+            container_level = container_level.merge(container_time_until_pull, on='container_id', how='left')
+            
+            # Calculate slack vectorized
+            container_level['slack_minutes'] = container_level['time_until_pull'] - container_level['total_processing_time']
+            
+            slack_calc_time = time.time() - slack_calc_start
+            
+            # Phase 6: Merge back to original DataFrame
+            final_merge_start = time.time()
+            
+            # Merge container-level calculations back to result_df
+            merge_columns = ['container_id', 'waiting_time', 'picking_time', 'travel_time', 'break_impact', 'slack_minutes']
+            result_df = result_df.merge(
+                container_level[merge_columns], 
+                on='container_id', 
+                how='left'
+            )
+            
+            final_merge_time = time.time() - final_merge_start
+            
+            # Phase 7: Slack categorization and priority handling
+            categorization_start = time.time()
+            
             # Add slack categories using config thresholds
             result_df['slack_category'] = pd.cut(
                 result_df['slack_minutes'], 
@@ -241,6 +384,15 @@ class SlackCalculator:
             }
             result_df['slack_weight'] = result_df['slack_category'].map(weight_mapping)
             
+            categorization_time = time.time() - categorization_start
+            total_time = time.time() - start_time
+            
+            # Log performance metrics
+            self.logger.debug(f"Slack calculation timing - Time calc: {time_calc_time:.3f}s, "
+                             f"Lookups: {lookup_time:.3f}s, Components: {components_time:.3f}s, "
+                             f"Merge: {merge_time:.3f}s, Slack calc: {slack_calc_time:.3f}s, "
+                             f"Final merge: {final_merge_time:.3f}s, Categorization: {categorization_time:.3f}s, "
+                             f"Total: {total_time:.3f}s")
             
             self._log_slack_summary(result_df)
             return result_df

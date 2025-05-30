@@ -3,6 +3,7 @@ Data validation module for tour formation (applies to run_complete and generate_
 
 """
 import pandas as pd
+import time
 from typing import Tuple, Dict, Any, Optional
 from tabulate import tabulate
 import logging
@@ -187,6 +188,8 @@ class DataValidator:
         pd.DataFrame
             Updated slotbook data with any necessary adjustments
         """
+        start_time = time.time()
+        
         self.logger.debug("Validating specific checks...")
         if 'altered' not in slotbook_data.columns:
             slotbook_data['altered'] = 0
@@ -212,7 +215,8 @@ class DataValidator:
                 "keeping entries with highest quantity"
             )
 
-        # Check item numbers in container data against slotbook
+        # Pre-compute sets for efficient lookups
+        missing_items_start = time.time()
         container_items = set(container_data['item_number'].unique())
         slotbook_items = set(slotbook_data['item_number'].unique())
         missing_items = container_items - slotbook_items
@@ -221,62 +225,97 @@ class DataValidator:
             self.logger.warning(f"Found {len(missing_items)} items in container data not present in slotbook")
             self.logger.debug(f"Missing items: {missing_items}")
             
-            # Create new rows for missing items
+            # Create new rows for missing items using vectorized operations
             # This is an assumption - slotbook may have changed, so we'll create a fwd_pick with 1000 qty inventory
-            new_rows = []
-            for item in missing_items:
-                item_container_data = container_data[container_data['item_number'] == item].iloc[0]
-                
-                new_row = {
-                    'wh_id': item_container_data['wh_id'],
-                    'item_number': item,
-                    'picking_flow_as_int': item_container_data['picking_flow_as_int'],
-                    'location_id': item_container_data['wms_pick_location'],
-                    'aisle_sequence': item_container_data['aisle_sequence'],
-                    'actual_qty': 1000,
-                    'type': 'P',
-                    'print_zone': 'Z01',
-                    'altered': 1
-                }
-                new_rows.append(new_row)
+            missing_items_list = list(missing_items)
             
-            if new_rows:
-                new_slotbook_entries = pd.DataFrame(new_rows)
-                slotbook_data = pd.concat([slotbook_data, new_slotbook_entries], ignore_index=True)
-                self.logger.info(f"Added {len(new_rows)} missing items to slotbook data")
+            # Get representative data for each missing item (first occurrence in container data)
+            missing_item_data = container_data[
+                container_data['item_number'].isin(missing_items_list)
+            ].drop_duplicates(subset=['item_number'], keep='first')[
+                ['wh_id', 'item_number', 'picking_flow_as_int', 'wms_pick_location', 'aisle_sequence']
+            ].copy()
+            
+            # Add the required columns for slotbook
+            missing_item_data['location_id'] = missing_item_data['wms_pick_location']
+            missing_item_data['actual_qty'] = 1000
+            missing_item_data['type'] = 'P'
+            missing_item_data['print_zone'] = 'Z01'
+            missing_item_data['altered'] = 1
+            
+            # Select only the columns that exist in slotbook_data
+            slotbook_columns = slotbook_data.columns.tolist()
+            missing_item_data = missing_item_data[
+                [col for col in missing_item_data.columns if col in slotbook_columns]
+            ]
+            
+            if not missing_item_data.empty:
+                slotbook_data = pd.concat([slotbook_data, missing_item_data], ignore_index=True)
+                self.logger.info(f"Added {len(missing_item_data)} missing items to slotbook data")
         
-        # Adjust inventory issues
-        insufficient_items = []
-        for item in container_items:
-            total_required = container_data[container_data['item_number'] == item]['pick_quantity'].sum()
-            total_available = slotbook_data[slotbook_data['item_number'] == item]['actual_qty'].sum()
+        missing_items_time = time.time() - missing_items_start
+        
+        # Vectorized inventory validation - calculate required vs available quantities
+        inventory_start = time.time()
+        
+        # Group container data to get total required quantities per item
+        required_quantities = container_data.groupby('item_number')['pick_quantity'].sum().reset_index()
+        required_quantities.columns = ['item_number', 'total_required']
+        
+        # Group slotbook data to get total available quantities per item
+        available_quantities = slotbook_data.groupby('item_number')['actual_qty'].sum().reset_index()
+        available_quantities.columns = ['item_number', 'total_available']
+        
+        # Merge to compare required vs available
+        inventory_comparison = pd.merge(
+            required_quantities, 
+            available_quantities, 
+            on='item_number', 
+            how='left'
+        )
+        
+        # Fill NaN values (items not in slotbook) with 0
+        inventory_comparison['total_available'] = inventory_comparison['total_available'].fillna(0)
+        
+        # Identify items with insufficient inventory
+        insufficient_mask = inventory_comparison['total_available'] < inventory_comparison['total_required']
+        insufficient_items_df = inventory_comparison[insufficient_mask].copy()
+        
+        if not insufficient_items_df.empty:
+            self.logger.warning(f"Found {len(insufficient_items_df)} items with insufficient inventory")
             
-            if total_available < total_required:
-                insufficient_items.append((item, total_required, total_available))
-                    
-        if insufficient_items:
-            self.logger.warning(f"Found {len(insufficient_items)} items with insufficient inventory")
-                    
-        for item, required, available in insufficient_items:
-            self.logger.debug(f"Insufficient inventory for SKU {item}. Required: {required}, Available: {available}")
-
-            # Locate the first row in slotbook_data where the item appears
-            try:
-                index_to_adjust = slotbook_data.index[slotbook_data['item_number'] == item][0]
-            except IndexError:
-                self.logger.error(f"Could not find item {item} in slotbook data despite earlier check. This should not happen.")
-                continue # Skip this item if not found (should not occur)
-
-            # Calculate additional inventory needed
-            # This is an assumption - we don't do any real-time inventory checks/adjustments
-            # Done to prevent infeasibility of the MIP model
-            additional_qty = required - available + 10000  # Add buffer of 10000
-
-            # Adjust inventory
-            slotbook_data.loc[index_to_adjust, ['actual_qty', 'altered']] = [
-                slotbook_data.at[index_to_adjust, 'actual_qty'] + additional_qty, 1]
+            # Calculate additional quantities needed for all insufficient items
+            insufficient_items_df['additional_qty'] = (
+                insufficient_items_df['total_required'] - 
+                insufficient_items_df['total_available'] + 10000  # Add buffer of 10000
+            )
             
-        # Check for items with multiple locations
+            # Batch update slotbook data for insufficient items
+            # For each insufficient item, find the first row in slotbook and adjust it
+            for _, row in insufficient_items_df.iterrows():
+                item = row['item_number']
+                additional_qty = row['additional_qty']
+                required = row['total_required']
+                available = row['total_available']
+                
+                self.logger.debug(f"Insufficient inventory for SKU {item}. Required: {required}, Available: {available}")
+                
+                # Find the first occurrence of this item in slotbook_data
+                item_mask = slotbook_data['item_number'] == item
+                item_indices = slotbook_data.index[item_mask]
+                
+                if len(item_indices) > 0:
+                    # Update the first occurrence
+                    first_index = item_indices[0]
+                    slotbook_data.loc[first_index, 'actual_qty'] += additional_qty
+                    slotbook_data.loc[first_index, 'altered'] = 1
+                else:
+                    self.logger.error(f"Could not find item {item} in slotbook data despite earlier check. This should not happen.")
+        
+        inventory_time = time.time() - inventory_start
+        
+        # Check for items with multiple locations using vectorized operations
+        multi_location_start = time.time()
         item_location_counts = slotbook_data.groupby('item_number')['location_id'].nunique()
         multi_location_items = item_location_counts[item_location_counts > 1]
         
@@ -286,8 +325,17 @@ class DataValidator:
             multi_loc_pct = round(100 * multi_loc_count / total_items, 1)
             
             self.logger.info(f"Items with multiple locations: {multi_loc_count} ({multi_loc_pct}% of total items)")
+        
+        multi_location_time = time.time() - multi_location_start
+        total_time = time.time() - start_time
+        
+        # Log performance metrics
+        self.logger.debug(f"Business rules validation timing - Missing items: {missing_items_time:.3f}s, "
+                         f"Inventory validation: {inventory_time:.3f}s, "
+                         f"Multi-location check: {multi_location_time:.3f}s, "
+                         f"Total: {total_time:.3f}s")
             
-        return slotbook_data 
+        return slotbook_data
              
     def _generate_summary_metrics(self, container_data: pd.DataFrame, slotbook_data: pd.DataFrame) -> None:
         """

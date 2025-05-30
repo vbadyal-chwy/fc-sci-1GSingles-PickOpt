@@ -18,7 +18,7 @@ from .slack_calculator import SlackCalculator
 from .tf_solver_service import TourFormationSolverService
 from .clustering.clusterer import ContainerClusterer
 from .tf_data_validator import DataValidator
-from .data_exchange import load_cached_containers_with_slack, write_cached_containers_with_slack
+from .data_exchange import load_cached_containers_with_slack, write_cached_containers_with_slack, save_validated_data, load_validated_data
 
 # Get module-specific logger with workflow logging
 from logging_config import get_logger
@@ -155,19 +155,46 @@ def _create_components(
         )
 
     # --- Data Validation Step ---
-    # Validate data after slack calculation
-    logger.info("Performing data validation")
-    validator = DataValidator(logger=logger)
-    try:
-        # Validate and update the dataframes
-        containers_df_with_slack, skus_df = validator.validate(
-            containers_df_with_slack, 
-            skus_df
-        )
-        logger.info("Data validation successful.")
-    except Exception as e:
-        logger.error(f"Data validation failed: {e}", exc_info=True)
-        raise
+    # Optimize validation for simulation: skip in solve_cluster mode, load pre-validated data
+    if mode == 'solve_cluster':
+        # Load pre-validated data for solve_cluster mode
+        logger.info("Loading pre-validated data for solve_cluster mode")
+        validated_containers_df, validated_skus_df = load_validated_data(working_dir, logger)
+        
+        if validated_containers_df is not None and validated_skus_df is not None:
+            containers_df_with_slack = validated_containers_df
+            skus_df = validated_skus_df
+            logger.info("Successfully loaded pre-validated data, skipping validation")
+        else:
+            # Fallback to full validation if pre-validated data not available
+            logger.warning("Pre-validated data not available, performing full validation")
+            validator = DataValidator(logger=logger)
+            try:
+                containers_df_with_slack, skus_df = validator.validate(
+                    containers_df_with_slack, 
+                    skus_df
+                )
+                logger.info("Data validation successful.")
+            except Exception as e:
+                logger.error(f"Data validation failed: {e}", exc_info=True)
+                raise
+    else:
+        # Perform full validation for generate_clusters and run_complete modes
+        logger.info("Performing data validation")
+        validator = DataValidator(logger=logger)
+        try:
+            containers_df_with_slack, skus_df = validator.validate(
+                containers_df_with_slack, 
+                skus_df
+            )
+            logger.info("Data validation successful.")
+            
+            # Save validated data for future solve_cluster operations
+            save_validated_data(working_dir, containers_df_with_slack, skus_df, logger)
+            
+        except Exception as e:
+            logger.error(f"Data validation failed: {e}", exc_info=True)
+            raise
 
     # --- Initialize other components ---
     # Pass output_dir to ContainerClusterer initialization

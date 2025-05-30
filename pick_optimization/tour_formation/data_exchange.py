@@ -11,7 +11,7 @@ import logging
 import os
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Union
+from typing import Dict, Any, List, Optional, Union, Tuple
 import pandas as pd
 
 # Get module-specific logger with workflow logging
@@ -77,6 +77,10 @@ def load_container_data(
         
         df = pd.read_csv(containers_path)
         
+        # Ensure container_id is string type for consistency
+        if 'container_id' in df.columns:
+            df['container_id'] = df['container_id'].astype(str)
+        
         # Convert datetime columns if they exist
         datetime_cols = ['arrive_datetime', 'pull_datetime', 'release_time']
         for col in datetime_cols:
@@ -121,6 +125,10 @@ def load_cached_containers_with_slack(working_dir: str, logger: Optional[logging
             logger.debug("Attempting to load cached container data with slack from the working directory")
         
         df = pd.read_csv(cached_containers_path)
+        
+        # Ensure container_id is string type for consistency
+        if 'container_id' in df.columns:
+            df['container_id'] = df['container_id'].astype(str)
         
         # Attempt to parse datetime columns if they were saved as strings
         for col in ['arrive_datetime', 'pull_datetime', 'release_time']:
@@ -501,3 +509,105 @@ def write_results(
 
     log.debug(f"Finished writing results. Processed {processed_clusters} clusters.")
     return all_successful
+
+def save_validated_data(
+    working_dir: str,
+    containers_df: pd.DataFrame,
+    skus_df: pd.DataFrame,
+    logger: Optional[logging.Logger] = None
+) -> bool:
+    """
+    Save validated container and slotbook data for use in solve_cluster mode.
+    
+    Parameters
+    ----------
+    working_dir : str
+        Directory to write the validated data files
+    containers_df : pd.DataFrame
+        Validated container data
+    skus_df : pd.DataFrame
+        Validated slotbook data
+    logger : Optional[logging.Logger]
+        Logger instance for logging messages
+        
+    Returns
+    -------
+    bool
+        True if successful, False otherwise
+    """
+    try:
+        # Ensure working_dir exists before saving
+        os.makedirs(working_dir, exist_ok=True)
+        
+        validated_containers_path = os.path.join(working_dir, 'validated_container_data.csv')
+        validated_slotbook_path = os.path.join(working_dir, 'validated_slotbook_data.csv')
+        
+        containers_df.to_csv(validated_containers_path, index=False)
+        skus_df.to_csv(validated_slotbook_path, index=False)
+        
+        if logger:
+            logger.info(f"Saved validated data: {validated_containers_path}, {validated_slotbook_path}")
+        return True
+        
+    except Exception as e:
+        if logger:
+            logger.error(f"Failed to save validated data: {e}", exc_info=True)
+        return False
+
+
+def load_validated_data(
+    working_dir: str,
+    logger: Optional[logging.Logger] = None
+) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
+    """
+    Load validated container and slotbook data from working directory.
+    
+    Parameters
+    ----------
+    working_dir : str
+        Directory containing the validated data files
+    logger : Optional[logging.Logger]
+        Logger instance for logging messages
+        
+    Returns
+    -------
+    Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]
+        Tuple of (containers_df, skus_df) if successful, (None, None) if failed
+    """
+    validated_containers_path = os.path.join(working_dir, 'validated_container_data.csv')
+    validated_slotbook_path = os.path.join(working_dir, 'validated_slotbook_data.csv')
+    
+    if not os.path.exists(validated_containers_path) or not os.path.exists(validated_slotbook_path):
+        if logger:
+            logger.warning("Validated data files not found. Will perform full validation.")
+        return None, None
+    
+    try:
+        if logger:
+            logger.info("Loading validated data from working directory")
+        
+        containers_df = pd.read_csv(validated_containers_path)
+        skus_df = pd.read_csv(validated_slotbook_path)
+        
+        # Ensure container_id is string type for consistency with container_ids lists
+        if 'container_id' in containers_df.columns:
+            containers_df['container_id'] = containers_df['container_id'].astype(str)
+        
+        # Convert datetime columns if they exist
+        datetime_cols = ['arrive_datetime', 'cut_datetime', 'pull_datetime']
+        for col in datetime_cols:
+            if col in containers_df.columns:
+                try:
+                    containers_df[col] = pd.to_datetime(containers_df[col])
+                except Exception as dt_err:
+                    if logger:
+                        logger.warning(f"Could not parse datetime column '{col}' from validated file: {dt_err}")
+        
+        if logger:
+            logger.info("Successfully loaded validated data from working directory")
+        return containers_df, skus_df
+        
+    except Exception as e:
+        if logger:
+            logger.warning(f"Failed to load validated data: {e}. Will perform full validation.")
+        return None, None
