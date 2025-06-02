@@ -801,29 +801,7 @@ class TourFormationModel:
                 # Create container_tours_df with optimal pick locations
                 container_rows = []
                 
-                # Process single-location SKUs
-                for i in data.container_ids:
-                    for s in data.single_location_skus:
-                        if (i,s) in data.container_sku_qty:
-                            a = data.single_location_skus[s]
-                            tour_id = solution['container_assignments'].get(i, {}).get('tour')
-                            
-                            # Get location details from slotbook data
-                            location_info = data.slotbook_data[
-                                (data.slotbook_data['item_number'] == s) & 
-                                (data.slotbook_data['aisle_sequence'] == a)
-                            ].iloc[0] if not data.slotbook_data.empty else None
-                            
-                            container_rows.append({
-                                'container_id': i,
-                                'sku': s,
-                                'quantity': data.container_sku_qty[(i,s)],
-                                'tour_id': tour_id,
-                                'optimal_pick_location': location_info['location_id'] if location_info is not None else None,
-                                'picking_flow_as_int': location_info['picking_flow_as_int'] if location_info is not None else None
-                            })
-                
-                # Process multi-location SKUs
+                # Process all SKUs from pick_assignments (which already includes both single and multi-location SKUs)
                 for i in data.container_ids:
                     if i in solution['pick_assignments']:
                         for pick in solution['pick_assignments'][i]:

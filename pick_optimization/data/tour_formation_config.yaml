@@ -44,7 +44,7 @@ clustering:
   min_clusters: 2                  # Minimum number of clusters to form
   max_clusters: 10                 # Maximum number of clusters to form
   linkage_method: 'ward'           # Hierarchical clustering linkage method (ward, complete, average, single)
-  generate_visualizations: true      # Enable/disable visualization of clusters
+  generate_visualizations: false      # Enable/disable visualization of clusters
   max_residual_attempts: 5           # Maximum number of attempts to assign residual containers
   subclustering:
     max_depth: 6                   # Maximum recursion depth for subclustering
@@ -76,6 +76,6 @@ gurobi:
 logging:
   log_base_dir: 'data/logs'
   console_level: 'INFO'
-  file_level: 'DEBUG'
+  file_level: 'INFO'
   console_format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
   file_format: '%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s'
