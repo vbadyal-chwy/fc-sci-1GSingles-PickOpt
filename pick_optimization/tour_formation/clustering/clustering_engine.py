@@ -279,20 +279,20 @@ class ClusteringEngine:
             total_containers = 0
             
             for cluster_id, info in sorted_clusters:
-                if total_tours + info['tours'] <= remaining_capacity:
-                    selected[cluster_id] = {
-                        'containers': info['containers'],
-                        'tours': info['tours']
-                    }
-                    total_tours += info['tours']
-                    total_containers += info['size']
-                    
-                    self.logger.debug(
-                        f"Selected cluster {cluster_id}: +{info['tours']} tours, "
-                        f"total now {total_tours}/{remaining_capacity}"
-                    )
+                # Add the cluster
+                selected[cluster_id] = {
+                    'containers': info['containers'],
+                    'tours': info['tours']
+                }
+                total_tours += info['tours']
+                total_containers += info['size']
                 
-                # Break if we've reached capacity
+                self.logger.debug(
+                    f"Selected cluster {cluster_id}: +{info['tours']} tours, "
+                    f"total now {total_tours}/{remaining_capacity}"
+                )
+                
+                # Break if we've reached or exceeded capacity - it is acceptable to exceed capacity by a few tours
                 if total_tours >= remaining_capacity:
                     break
             

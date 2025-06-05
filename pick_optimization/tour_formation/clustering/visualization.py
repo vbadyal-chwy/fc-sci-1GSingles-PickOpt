@@ -48,8 +48,9 @@ class Visualizer:
         self.logger = logger
         self.base_output_dir = base_output_dir # Store the provided base directory
         self.dpi = 300
-        self.enabled = True
-        
+        self.clustering_config = config.get('clustering', {})
+        self.enabled = self.clustering_config.get('generate_visualizations', False)
+
         # --- Create output subdirectories relative to base_output_dir --- 
         self.seed_clusters_path = os.path.join(self.base_output_dir, 'seed_clusters')
         self.augmented_clusters_path = os.path.join(self.base_output_dir, 'augmented_clusters')
