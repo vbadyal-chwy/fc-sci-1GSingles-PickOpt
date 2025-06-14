@@ -9,7 +9,7 @@ from tabulate import tabulate
 import logging
 
 # Get module-specific logger with workflow logging
-from logging_config import get_logger
+from pick_optimization.utils.logging_config import get_logger
 logger = get_logger(__name__, 'tour_formation')
 
 class DataValidator:
@@ -83,15 +83,12 @@ class DataValidator:
             'wh_id': str,
             'container_id': str,
             'arrive_datetime': str,
-            'cut_datetime': str,
             'pull_datetime': str,
             'item_number': str,
             'pick_quantity': int,
-            'wms_pick_location': str,
-            'print_zone': int,
             'aisle_sequence': int,
+            'wms_pick_location': str,
             'picking_flow_as_int': int,
-            'released_flag': int,
             'priority': int
         }
         
@@ -105,7 +102,7 @@ class DataValidator:
                     raise ValueError(f"Data type conversion failed for {col}")
         
         # Convert datetime columns
-        datetime_cols = ['arrive_datetime', 'cut_datetime', 'pull_datetime']
+        datetime_cols = ['arrive_datetime', 'pull_datetime']
         for col in datetime_cols:
             if col in df.columns:
                 df[col] = pd.to_datetime(df[col])
@@ -358,9 +355,7 @@ class DataValidator:
             ["Avg. quantity per item", 
              round(container_data.groupby(['container_id', 'item_number'])['pick_quantity'].sum().mean(), 2)],
             ["Earliest arrival date", container_data['arrive_datetime'].min().strftime('%Y-%m-%d %H:%M')],
-            ["Latest arrival date", container_data['arrive_datetime'].max().strftime('%Y-%m-%d %H:%M')],
-            ["Earliest cut date", container_data['cut_datetime'].min().strftime('%Y-%m-%d %H:%M')],
-            ["Latest cut date", container_data['cut_datetime'].max().strftime('%Y-%m-%d %H:%M')]
+            ["Latest arrival date", container_data['arrive_datetime'].max().strftime('%Y-%m-%d %H:%M')]
         ]
         
         # Print metrics table

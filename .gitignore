@@ -1,14 +1,11 @@
 # Ignore config files
 # pick_optimization/config/gurobi_config.yaml
 
-# Ignore input / output folders
-
-
 
 # Ignore log files
 *.log
 
-# Ignore output folder
+# Ignore input / output folders
 output/
 input/
 working/
@@ -19,7 +16,7 @@ __pycache__/
 *$py.class
 
 # Virtual environment
-pickplan-env/
+pickopt-env/
 env/
 *.venv
 .env
@@ -33,7 +30,13 @@ env/
 .DS_Store
 Thumbs.db
 
+# Gradle
 .gradle/
 
+# Logs
 ./logs
+
+# LocalDatabase
+*.db
+
 

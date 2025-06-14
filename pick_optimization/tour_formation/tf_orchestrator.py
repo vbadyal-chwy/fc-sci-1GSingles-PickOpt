@@ -21,7 +21,7 @@ from .tf_data_validator import DataValidator
 from .data_exchange import load_cached_containers_with_slack, write_cached_containers_with_slack, save_validated_data, load_validated_data
 
 # Get module-specific logger with workflow logging
-from logging_config import get_logger
+from pick_optimization.utils.logging_config import get_logger
 logger = get_logger(__name__, 'tour_formation')
 
 def calculate_average_upc(containers_df: pd.DataFrame, logger: logging.Logger) -> float:
@@ -50,17 +50,25 @@ def calculate_average_upc(containers_df: pd.DataFrame, logger: logging.Logger) -
     return avg_upc
 
 def calculate_container_target(
+    wh_id: str,
+    planning_timestamp: datetime,
     active_pickers: int,
     avg_pick_uph: float,
     avg_container_upc: float,
     variability_factor: float,
+    containers_df: pd.DataFrame,
+    tf_min_containers_in_backlog: int,
     logger: logging.Logger
-) -> int:
+) -> Tuple[int, pd.DataFrame]:
     """
-    Calculate the target number of containers to process per interval.
+    Calculate the target number of containers to process per interval and evaluate TF trigger logic.
     
     Parameters:
     -----------
+    wh_id : str
+        Warehouse ID
+    planning_timestamp : datetime
+        Planning timestamp for this calculation
     active_pickers : int
         Current active picker headcount (R)
     avg_pick_uph : float
@@ -69,30 +77,85 @@ def calculate_container_target(
         Average backlog container units per container (C)
     variability_factor : float
         Factor to account for demand fluctuations and uncertainties (gamma)
+    containers_df : pd.DataFrame
+        DataFrame containing current container backlog data
+    tf_min_containers_in_backlog : int
+        Minimum number of containers required to trigger TF
     logger : logging.Logger
         Logger instance for logging messages
     
     Returns:
     --------
-    int
-        Target number of containers per interval, rounded to nearest integer
+    Tuple[int, pd.DataFrame]
+        - Target number of containers per interval, rounded to nearest integer
+        - DataFrame containing input parameters, calculated target, and TF trigger evaluation
     
     Notes:
     ------
     The formula used is: Tfinal = gamma * R * (U / C)
+    TF trigger logic: trigger_tf_flag = (backlog_container_count >= tf_min_containers_in_backlog)
     """
-    # Step 1: Base target calculation
+    # Step 1: Calculate backlog container count
+    backlog_container_count = containers_df['container_id'].nunique()
+    logger.info(f"Backlog container count: {backlog_container_count}")
+    
+    # Step 2: Evaluate TF trigger logic
+    trigger_tf_flag = backlog_container_count >= tf_min_containers_in_backlog
+    logger.info(f"TF trigger evaluation: {backlog_container_count} >= {tf_min_containers_in_backlog} = {trigger_tf_flag}")
+    
+    if not trigger_tf_flag:
+        logger.info(f"TF will be skipped: backlog container count ({backlog_container_count}) "
+                   f"is below minimum threshold ({tf_min_containers_in_backlog})")
+    
+    # Step 3: Base target calculation
     base_target = active_pickers * (avg_pick_uph / avg_container_upc)
     
-    # Step 2: Adjust for variability
+    # Step 4: Adjust for variability
     final_target = variability_factor * base_target
     
     final_target = round(final_target)
     
     logger.info(f"Calculated container target: {final_target}")
     
-    # Return as integer (rounded)
-    return final_target
+    # Create metrics DataFrame with actual values
+    container_target_df = pd.DataFrame({
+        'wh_id': [wh_id],
+        'planning_datetime': [planning_timestamp],  # Use datetime for database compatibility
+        'active_headcount_multis': [active_pickers],
+        'historical_uph_multis': [avg_pick_uph],
+        'avg_upc_multis': [avg_container_upc],
+        'container_target_variability_factor': [variability_factor],
+        'target_containers_per_interval': [final_target],
+        'backlog_container_count': [backlog_container_count],  # Actual backlog count
+        'trigger_tf_flag': [trigger_tf_flag]  # Actual trigger evaluation
+    })
+    
+    # Return as tuple of integer (rounded) and metrics DataFrame
+    return final_target, container_target_df
+
+
+def should_trigger_tf(container_target_df: pd.DataFrame, logger: logging.Logger) -> bool:
+    """
+    Check if TF should be triggered based on the container target evaluation.
+    
+    Parameters
+    ----------
+    container_target_df : pd.DataFrame
+        DataFrame containing TF trigger evaluation results
+    logger : logging.Logger
+        Logger instance for logging messages
+        
+    Returns
+    -------
+    bool
+        True if TF should be triggered, False otherwise
+    """
+
+    trigger_flag = container_target_df['trigger_tf_flag'].iloc[0]
+    backlog_count = container_target_df.get('backlog_container_count', pd.Series([0])).iloc[0]
+    
+    logger.info(f"TF trigger check: trigger_tf_flag={trigger_flag}, backlog_container_count={backlog_count}")
+    return bool(trigger_flag)
 
 def _create_components(
     containers_df: pd.DataFrame,
@@ -113,15 +176,25 @@ def _create_components(
     calculated_slack = False
     slack_calculator = None
 
-    # Calculate container target
-    avg_upc = calculate_average_upc(containers_df, logger)
-    container_target = calculate_container_target(
-        active_pickers=labor_headcount,
-        avg_pick_uph=config['global']['avg_pick_uph'],
-        avg_container_upc=avg_upc,
-        variability_factor=config['global']['container_target_variability_factor'],
-        logger=logger
-    )
+    # Calculate container target and evaluate TF trigger logic (skip for solve_cluster mode)
+    container_target = None
+    container_target_df = None
+    
+    if mode != 'solve_cluster':
+        avg_upc = calculate_average_upc(containers_df, logger)
+        container_target, container_target_df = calculate_container_target(
+            wh_id=config['global']['wh_id'],
+            planning_timestamp=planning_timestamp,
+            active_pickers=labor_headcount,
+            avg_pick_uph=config['global']['avg_pick_uph'],
+            avg_container_upc=avg_upc,
+            variability_factor=config['global']['container_target_variability_factor'],
+            containers_df=containers_df,
+            tf_min_containers_in_backlog=config['global']['tf_min_containers_in_backlog'],
+            logger=logger
+        )
+    else:
+        logger.info("Skipping container target calculation for solve_cluster mode")
     
     # 1. Loading from cache if in solve_cluster mode
     if mode == 'solve_cluster':
@@ -151,6 +224,55 @@ def _create_components(
         write_cached_containers_with_slack(
             working_dir=working_dir,
             containers_df=containers_df_with_slack,
+            logger=logger
+        )
+    
+    # 4. Write TF preprocessing outputs (container slack and target) to output directory
+    # Only write if we have the data and we're not in solve_cluster mode
+    if mode != 'solve_cluster':
+        # Import the function here to avoid circular imports
+        from .data_exchange import write_tf_preprocessing_outputs
+        
+        # Prepare container slack DataFrame - extract only container-level slack data
+        container_slack_df = None
+        if containers_df_with_slack is not None and 'slack_minutes' in containers_df_with_slack.columns:
+            # Create container slack DataFrame with required fields for database schema
+            slack_columns = ['container_id', 'time_until_pull', 'waiting_time', 'picking_time', 
+                           'travel_time', 'break_impact', 'other_time', 'total_processing_time', 'slack_minutes', 'slack_category']
+            available_columns = [col for col in slack_columns if col in containers_df_with_slack.columns]
+            
+            if available_columns:
+                container_slack_df = containers_df_with_slack[available_columns].drop_duplicates(subset=['container_id'])
+                # Add any missing columns with default values
+                if 'time_until_pull' not in container_slack_df.columns:
+                    container_slack_df['time_until_pull'] = 0.0
+                if 'waiting_time' not in container_slack_df.columns:
+                    container_slack_df['waiting_time'] = container_slack_df.get('virtual_waiting_time')
+                # Add pack_time (same as other_time) with default OTHER_TIME_BUFFER value (usually 5 minutes)
+                if 'pack_time' not in container_slack_df.columns:
+                    # Use other_time if available, otherwise default to 5.0
+                    container_slack_df['pack_time'] = container_slack_df.get('other_time')
+                # Add virtual_waiting_time for database compatibility
+                if 'virtual_waiting_time' not in container_slack_df.columns:
+                    container_slack_df['virtual_waiting_time'] = container_slack_df.get('waiting_time')
+                
+                # Add wh_id and planning_datetime columns for database consistency
+                container_slack_df['wh_id'] = config['global']['wh_id']
+                container_slack_df['planning_datetime'] = planning_timestamp
+                
+                # Reorder columns to match database schema (pack_time = other_time)
+                schema_columns = ['wh_id', 'planning_datetime', 'container_id', 'time_until_pull', 'virtual_waiting_time', 'picking_time', 
+                                'travel_time', 'pack_time', 'break_impact', 'total_processing_time', 
+                                'slack_minutes', 'slack_category']
+                # Only include columns that exist in the DataFrame
+                ordered_columns = [col for col in schema_columns if col in container_slack_df.columns]
+                container_slack_df = container_slack_df[ordered_columns]
+        
+        # Write preprocessing outputs
+        write_tf_preprocessing_outputs(
+            output_dir=output_dir,
+            container_slack_df=container_slack_df,
+            tf_container_target_df=container_target_df,
             logger=logger
         )
 
@@ -198,6 +320,7 @@ def _create_components(
 
     # --- Initialize other components ---
     # Pass output_dir to ContainerClusterer initialization
+    # For solve_cluster mode, container_target is not needed since clustering is already done
     clusterer = ContainerClusterer(config=config, logger=logger, output_dir=output_dir, container_target=container_target)
 
     # Initialize the Solver Service
@@ -210,7 +333,8 @@ def _create_components(
         'containers_df': containers_df_with_slack,  # Use the final df (loaded or calculated)
         'skus_df': skus_df,
         'output_dir': output_dir,
-        'working_dir': working_dir
+        'working_dir': working_dir,
+        'container_target_df': container_target_df
     }
 
 
@@ -218,15 +342,20 @@ def _perform_clustering(
     clusterer: ContainerClusterer,
     containers_df: pd.DataFrame,
     skus_df: pd.DataFrame, 
-    logger: logging.Logger
+    logger: logging.Logger,
+    output_dir: str = None,
+    wh_id: str = None,
+    planning_datetime: datetime = None
 ) -> Tuple[Dict[str, List[str]], Dict[str, Dict[str, Any]]]:
-    """Perform container clustering."""
+    """Perform container clustering and optionally write clustering outputs."""
     try:
         logger.info("Performing container clustering")
       
-        clusters, cluster_tours = clusterer.cluster_containers(
+        clusters, cluster_tours, container_clustering_df, clustering_metadata_df = clusterer.cluster_containers(
             container_data=containers_df,
-            slotbook_data=skus_df
+            slotbook_data=skus_df,
+            wh_id=wh_id,
+            planning_datetime=planning_datetime
         )
         logger.info(f"Clustering complete. Found {len(clusters)} clusters.")
         
@@ -237,6 +366,28 @@ def _perform_clustering(
 
         # TODO: Refine how cluster_metadata (esp. tour_id_offset) is obtained
         cluster_metadata = clusterer.cluster_metadata if hasattr(clusterer, 'cluster_metadata') else {}
+
+        # Write clustering outputs to files if output_dir and parameters are provided  
+        if output_dir and wh_id and planning_datetime and not container_clustering_df.empty and not clustering_metadata_df.empty:
+            try:
+                from .data_exchange import write_tf_clustering_outputs
+                
+                # Write the clustering outputs using the DataFrames returned from clustering
+                success = write_tf_clustering_outputs(
+                    output_dir=output_dir,
+                    container_clustering_df=container_clustering_df,
+                    clustering_metadata_df=clustering_metadata_df,
+                    logger=logger
+                )
+                
+                if success:
+                    logger.info("Successfully wrote clustering output files")
+                else:
+                    logger.warning("Failed to write clustering output files")
+                    
+            except Exception as e:
+                logger.error(f"Error writing clustering outputs: {e}")
+                # Don't fail the overall clustering process
 
         return clusters, cluster_metadata
     
@@ -253,19 +404,29 @@ def run_local_workflow(
     logger: logging.Logger,
     planning_timestamp: datetime,
     labor_headcount: Optional[int] = None
-) -> List[Dict[str, Any]]:
-    """Run the full local workflow: clustering + solving all clusters."""
+) -> Tuple[List[Dict[str, Any]], pd.DataFrame]:
+    """Run the full local workflow: clustering + solving all clusters.
+    
+    Returns:
+        Tuple containing:
+            - List of result dictionaries for each cluster
+            - Container target DataFrame with metrics
+    """
     logger.info("Running local workflow (clustering + solving)")
     clusterer = components['clusterer']
     solver_service: TourFormationSolverService = components['solver_service']
     containers_df = components['containers_df'] # Use potentially updated df
     skus_df = components['skus_df']
+    container_target_df = components['container_target_df']
 
     clusters, cluster_metadata = _perform_clustering(
         clusterer=clusterer,
         containers_df=containers_df,
         skus_df=skus_df,
-        logger=logger
+        logger=logger,
+        output_dir=components.get('output_dir'),
+        wh_id=config.get('global', {}).get('wh_id'),
+        planning_datetime=planning_timestamp
     )
 
     results = []
@@ -291,28 +452,42 @@ def run_local_workflow(
         f"Local workflow finished. Total clusters: {len(results)}. "
         f"Successful: {len(successful_solves)}, Skipped: {len(skipped_solves)}, Failed: {len(failed_solves)}."
     )
-    return results
+    return results, container_target_df
 
 
 def run_clustering_step(
     components: Dict[str, Any],
-    logger: logging.Logger
-) -> Tuple[Dict[str, List[str]], Dict[str, Dict[str, Any]]]:
-    """Run only the clustering step."""
+    logger: logging.Logger,
+    config: Dict[str, Any] = None,
+    planning_timestamp: datetime = None
+) -> Tuple[Dict[str, List[str]], Dict[str, Dict[str, Any]], pd.DataFrame]:
+    """Run only the clustering step.
+    
+    Returns:
+        Tuple containing:
+            - Dictionary mapping cluster IDs to container IDs
+            - Dictionary of cluster metadata
+            - Container target DataFrame with metrics
+    """
     
     logger.info("Running clustering step")
     clusterer = components['clusterer']
     containers_df = components['containers_df']
     skus_df = components['skus_df']
+    container_target_df = components['container_target_df']
 
+    
     clusters, cluster_metadata = _perform_clustering(
         clusterer=clusterer,
         containers_df=containers_df,
         skus_df=skus_df,
-        logger=logger
+        logger=logger,
+        output_dir=components.get('output_dir'),
+        wh_id=config.get('global', {}).get('wh_id') if config else None,
+        planning_datetime=planning_timestamp
     )
     
-    return clusters, cluster_metadata
+    return clusters, cluster_metadata, container_target_df
 
 
 def solve_single_cluster(
@@ -324,15 +499,21 @@ def solve_single_cluster(
     container_ids: List[str],
     cluster_metadata: Dict[str, Any],
     labor_headcount: Optional[int] = None
-) -> Dict[str, Any]:
+) -> Tuple[Dict[str, Any], Optional[pd.DataFrame]]:
     """
     Solves a single, specified cluster using the Solver Service.
+    
+    Returns:
+        Tuple containing:
+            - Result dictionary for the solved cluster
+            - Container target DataFrame with metrics (None for solve_cluster mode)
     """
     
     logger.info(f"Orchestrating solve for single cluster: {cluster_id}")
     solver_service: TourFormationSolverService = components['solver_service']
     containers_df = components['containers_df']
     skus_df = components['skus_df']
+    container_target_df = components.get('container_target_df')  # May be None in solve_cluster mode
 
     # Call the solver service
     result = solver_service.solve_one_cluster(
@@ -341,9 +522,10 @@ def solve_single_cluster(
         skus_df=skus_df,
         planning_timestamp=planning_timestamp,
         cluster_id=cluster_id,
-        cluster_metadata=cluster_metadata
+        cluster_metadata=cluster_metadata,
+        wh_id = config['global']['wh_id']
     )
-    return result
+    return result, container_target_df
 
 
 # --- Main Orchestration Function ---
@@ -366,9 +548,9 @@ def orchestrate_tour_formation(
     Orchestrates the tour formation process based on the mode.
 
     Returns:
-        - List[Dict]: Results for 'run_complete' mode.
-        - Tuple[Dict, Dict]: Clusters and metadata for 'generate_clusters' mode.
-        - Dict: Result for a single cluster in 'solve_cluster' mode.
+        - Tuple[List[Dict], pd.DataFrame]: Results and container target DataFrame for 'run_complete' mode.
+        - Tuple[Dict, Dict, pd.DataFrame]: Clusters, metadata, and container target DataFrame for 'generate_clusters' mode.
+        - Tuple[Dict, pd.DataFrame]: Result and container target DataFrame for a single cluster in 'solve_cluster' mode.
         - None: If mode is invalid or an error occurs upstream.
     """
     valid_modes = ['run_complete', 'generate_clusters', 'solve_cluster']
@@ -389,6 +571,16 @@ def orchestrate_tour_formation(
         labor_headcount=labor_headcount
     )
 
+    # Check if TF should be triggered (only applies to run_complete and generate_clusters modes)
+    container_target_df = components.get('container_target_df')
+    if mode in ['run_complete', 'generate_clusters'] and not should_trigger_tf(container_target_df, logger):
+        logger.info("TF processing skipped due to insufficient container backlog")
+        # Return appropriate structure based on mode with empty results
+        if mode == 'run_complete':
+            return [], container_target_df  # Empty results list
+        elif mode == 'generate_clusters':
+            return {}, {}, container_target_df  # Empty clusters and metadata
+    
     # --- Mode-Specific Execution ---
     if mode == 'run_complete':
         return run_local_workflow(
@@ -401,7 +593,9 @@ def orchestrate_tour_formation(
     elif mode == 'generate_clusters':
         return run_clustering_step(
             components=components,
-            logger=logger
+            logger=logger,
+            config=config,
+            planning_timestamp=planning_timestamp
         )
     elif mode == 'solve_cluster':
         if not all([cluster_to_solve_id, cluster_to_solve_containers is not None, 

@@ -16,7 +16,7 @@ import pandas as pd
 from tabulate import tabulate
 
 # Get module-specific logger with workflow logging
-from logging_config import get_logger
+from pick_optimization.utils.logging_config import get_logger
 logger = get_logger(__name__, 'tour_formation')
 
 class TourFormationModel:
@@ -150,7 +150,8 @@ class TourFormationModel:
         
         finally:
             end_time = time.time()
-            self.logger.info(f"Model building completed in {end_time - start_time:.2f} seconds")
+            self.build_time = end_time - start_time  # Store build_time for later use
+            self.logger.info(f"Model building completed in {self.build_time:.2f} seconds")
     
     def _add_variables(self) -> None:
         """
@@ -677,13 +678,16 @@ class TourFormationModel:
             # Optimize with callback
             self.model.optimize(self.get_callback())
             
+            # Calculate solve time
+            solve_time = time.time() - start_time
+            
             # Check solution status
             if self.model.SolCount > 0:
                 if self.model._terminated_early:
                     self.logger.info(f"Solution terminated early due to no improvement in {self.early_termination_seconds} seconds")
                     self.logger.info(f"Solution found with objective: {self.model.ObjVal}")
-                    self.logger.info(f"Solution found in {time.time() - start_time:.2f} seconds")
-                    return self._extract_solution()
+                    self.logger.info(f"Solution found in {solve_time:.2f} seconds")
+                    return self._extract_solution(build_time=getattr(self, 'build_time', 0.0), solve_time=solve_time)
             else:
                 self.logger.warning(f"No optimal solution found. Status: {self.model.status}")
                 if self.model.status == GRB.INFEASIBLE:
@@ -694,7 +698,7 @@ class TourFormationModel:
             self.logger.error(f"Error solving model: {str(e)}")
             raise
 
-    def _extract_solution(self) -> Dict[str, Any]:
+    def _extract_solution(self, build_time: float = 0.0, solve_time: float = 0.0) -> Dict[str, Any]:
         """
         Extract solution components from the optimized model.
         
@@ -833,6 +837,57 @@ class TourFormationModel:
                     for col in additional_cols:
                         solution['container_tours_df'][col] = data.containers_df[col]
 
+                # --- NEW: Create solve metrics for clustering metadata update ---
+                solve_metrics = {
+                    'cluster_id': self.cluster_id,
+                    'solve_time': solve_time,
+                    'objective_value': self.model.objVal,
+                    'total_distance': distance_value,
+                    'total_slack': slack_value,
+                    'actual_tour_count': int(tour_count_value)
+                }
+                solution['solve_metrics'] = solve_metrics
+
+                # --- NEW: Create tour formation DataFrame ---
+                tour_formation_rows = []
+                sequence_counter = {}  # Track sequence per tour
+                
+                for i in data.container_ids:
+                    if i in solution['pick_assignments']:
+                        tour_id = solution['container_assignments'].get(i, {}).get('tour')
+                        
+                        # Only include containers where tour_id is not null
+                        if tour_id is not None:
+                            # Initialize sequence counter for this tour
+                            if tour_id not in sequence_counter:
+                                sequence_counter[tour_id] = 1
+                            
+                            for pick in solution['pick_assignments'][i]:
+                                # Get location details from slotbook data
+                                location_info = None
+                                if hasattr(data, 'slotbook_data') and not data.slotbook_data.empty:
+                                    matching_rows = data.slotbook_data[
+                                        (data.slotbook_data['item_number'] == pick['sku']) & 
+                                        (data.slotbook_data['aisle_sequence'] == pick['aisle'])
+                                    ]
+                                    if not matching_rows.empty:
+                                        location_info = matching_rows.iloc[0]
+                                
+                                tour_formation_rows.append({
+                                    'wh_id': data.wh_id,
+                                    'planning_datetime': data.planning_datetime,
+                                    'cluster_id': self.cluster_id,
+                                    'tour_id': tour_id,  # Simple integer format
+                                    'container_id': i,
+                                    'item_number': pick['sku'],
+                                    'pick_location': location_info['location_id'] if location_info is not None else None,
+                                    'sequence_order': sequence_counter[tour_id],
+                                    'pick_quantity': pick['quantity']
+                                })
+                                sequence_counter[tour_id] += 1
+                
+                solution['tour_formation_df'] = pd.DataFrame(tour_formation_rows)
+
                 # --- Save Outputs to CSV ---
                 if self.output_dir and self.cluster_id is not None:
                     try:
@@ -878,6 +933,23 @@ class TourFormationModel:
                             self.logger.info("Saved aisle ranges to output directory")  #{aisle_ranges_path}")
                         else:
                             self.logger.info("No aisle ranges to save.")
+
+                        # 5. Save solve_metrics
+                        if solution['solve_metrics']:
+                            solve_metrics_df = pd.DataFrame([solution['solve_metrics']])
+                            solve_metrics_path = os.path.join(self.output_dir, f"{base_filename}_solve_metrics.csv")
+                            solve_metrics_df.to_csv(solve_metrics_path, index=False)
+                            self.logger.info("Saved solve metrics to output directory")
+                        else:
+                            self.logger.info("No solve metrics to save.")
+
+                        # 6. Save tour_formation_df
+                        if not solution['tour_formation_df'].empty:
+                            tour_formation_path = os.path.join(self.output_dir, f"{base_filename}_tour_formation.csv")
+                            solution['tour_formation_df'].to_csv(tour_formation_path, index=False)
+                            self.logger.info("Saved tour formation to output directory")
+                        else:
+                            self.logger.info("No tour formation data to save.")
 
                     except Exception as save_e:
                         self.logger.error(f"Failed to save output CSV files for cluster {self.cluster_id}: {save_e}")

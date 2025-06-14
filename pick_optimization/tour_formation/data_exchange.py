@@ -15,7 +15,7 @@ from typing import Dict, Any, List, Optional, Union, Tuple
 import pandas as pd
 
 # Get module-specific logger with workflow logging
-from logging_config import get_logger
+from pick_optimization.utils.logging_config import get_logger
 logger = get_logger(__name__, 'tour_formation')
 
 @dataclass
@@ -219,6 +219,7 @@ def write_subproblems(
     output_dir: str,
     clusters: Union[Dict[str, List[str]], SubproblemData],
     cluster_metadata: Optional[Dict[str, Dict[str, Any]]] = None,
+    container_target_df: Optional[pd.DataFrame] = None,
     logger: Optional[logging.Logger] = None
 ) -> bool:
     """
@@ -430,6 +431,62 @@ def read_subproblem(
     return subproblem
 
 
+def _update_clustering_metadata_with_solve_metrics(
+    output_dir: str,
+    solve_metrics: Dict[str, Any],
+    logger: Optional[logging.Logger] = None
+) -> bool:
+    """
+    Update existing clustering metadata file with solve metrics from cluster solving.
+    
+    Parameters
+    ----------
+    output_dir : str
+        Directory containing the clustering_metadata.csv file
+    solve_metrics : Dict[str, Any]
+        Dictionary containing solve metrics (cluster_id, solve_time, objective_value, etc.)
+    logger : Optional[logging.Logger]
+        Logger instance for logging messages
+        
+    Returns
+    -------
+    bool
+        True if successful, False otherwise
+    """
+    log = logger or logging.getLogger(__name__)
+    metadata_path = os.path.join(output_dir, 'clustering_metadata.csv')
+    
+    try:
+        # Check if clustering metadata file exists
+        if not os.path.exists(metadata_path):
+            log.warning(f"Clustering metadata file not found: {metadata_path}. Cannot update with solve metrics.")
+            return False
+        
+        # Read existing metadata
+        metadata_df = pd.read_csv(metadata_path)
+        cluster_id = solve_metrics['cluster_id']
+        
+        # Find the row for this cluster_id
+        cluster_mask = metadata_df['cluster_id'] == cluster_id
+        if not cluster_mask.any():
+            log.warning(f"Cluster ID {cluster_id} not found in clustering metadata. Cannot update with solve metrics.")
+            return False
+        
+        # Update the row with solve metrics
+        for metric_name, metric_value in solve_metrics.items():
+            if metric_name != 'cluster_id':  # Don't overwrite cluster_id
+                metadata_df.loc[cluster_mask, metric_name] = metric_value
+        
+        # Write back the updated metadata
+        metadata_df.to_csv(metadata_path, index=False)
+        log.debug(f"Updated clustering metadata for cluster {cluster_id} with solve metrics")
+        return True
+        
+    except Exception as e:
+        log.error(f"Failed to update clustering metadata with solve metrics: {e}")
+        return False
+
+
 def write_results(
     output_dir: str,
     results: List[Dict[str, Any]],
@@ -473,16 +530,31 @@ def write_results(
         ca_df = result.get('container_assignments_df')
         pa_df = result.get('pick_assignments_df')
         ar_df = result.get('aisle_ranges_df')
-        m_df = result.get('metrics_df')
+        m_df = result.get('container_target_df')
         ct_df = result.get('container_tours_df') # Optional
+        cs_df = result.get('container_slack_df') # New - Container slack calculations
+        ctar_df = result.get('tf_container_target_df') # New - Container target calculations
+        solve_metrics = result.get('solve_metrics') # NEW - Solve metrics for clustering metadata update
+        tf_df = result.get('tour_formation_df') # NEW - Tour formation details
+
+        # Handle solve metrics update for clustering metadata
+        if solve_metrics:
+            try:
+                _update_clustering_metadata_with_solve_metrics(output_dir, solve_metrics, log)
+            except Exception as e:
+                log.error(f"Failed to update clustering metadata with solve metrics for cluster {cluster_id}: {e}")
+                all_successful = False
 
         # Define file mappings
         file_map = {
             'container_assignments': ca_df,
             'pick_assignments': pa_df,
             'aisle_ranges': ar_df,
-            'metrics': m_df,
-            'container_tours': ct_df
+            'container_target': m_df,
+            'container_tours': ct_df,
+            'container_slack': cs_df,
+            'tf_container_target': ctar_df,
+            'tour_formation': tf_df         # NEW
         }
 
         # Write each dataframe to its own file
@@ -509,6 +581,128 @@ def write_results(
 
     log.debug(f"Finished writing results. Processed {processed_clusters} clusters.")
     return all_successful
+
+
+def write_tf_preprocessing_outputs(
+    output_dir: str,
+    container_slack_df: Optional[pd.DataFrame] = None,
+    tf_container_target_df: Optional[pd.DataFrame] = None,
+    logger: Optional[logging.Logger] = None
+) -> bool:
+    """
+    Write TF preprocessing outputs (container slack and target calculations) to CSV files.
+    
+    These are planning-iteration level outputs, not cluster-specific.
+    
+    Parameters
+    ----------
+    output_dir : str
+        Directory to write the output files
+    container_slack_df : Optional[pd.DataFrame]
+        Container slack calculations DataFrame
+    tf_container_target_df : Optional[pd.DataFrame]
+        Container target calculations DataFrame
+    logger : Optional[logging.Logger]
+        Logger instance for logging messages
+        
+    Returns
+    -------
+    bool
+        True if successful, False otherwise
+    """
+    log = logger or logging.getLogger(__name__)
+    all_successful = True
+    files_written = []
+    
+    try:
+        # Ensure output directory exists
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Write container slack data
+        if container_slack_df is not None and isinstance(container_slack_df, pd.DataFrame) and not container_slack_df.empty:
+            slack_path = os.path.join(output_dir, 'tf_container_slack.csv')
+            container_slack_df.to_csv(slack_path, index=False)
+            files_written.append('tf_container_slack.csv')
+            log.debug(f"Wrote container slack data: {slack_path}")
+        
+        # Write container target data
+        if tf_container_target_df is not None and isinstance(tf_container_target_df, pd.DataFrame) and not tf_container_target_df.empty:
+            target_path = os.path.join(output_dir, 'tf_container_target.csv')
+            tf_container_target_df.to_csv(target_path, index=False)
+            files_written.append('tf_container_target.csv')
+            log.debug(f"Wrote container target data: {target_path}")
+        
+        if files_written:
+            log.info(f"Successfully wrote {len(files_written)} TF preprocessing output files: {', '.join(files_written)}")
+        else:
+            log.debug("No TF preprocessing outputs to write (all DataFrames were None or empty)")
+            
+        return all_successful
+        
+    except Exception as e:
+        log.error(f"Failed to write TF preprocessing outputs: {e}", exc_info=True)
+        return False
+
+
+def write_tf_clustering_outputs(
+    output_dir: str,
+    container_clustering_df: Optional[pd.DataFrame] = None,
+    clustering_metadata_df: Optional[pd.DataFrame] = None,
+    logger: Optional[logging.Logger] = None
+) -> bool:
+    """
+    Write TF clustering outputs (container clustering assignments and metadata) to CSV files.
+    
+    These are the clustering results from the TF model for database integration.
+    
+    Parameters
+    ----------
+    output_dir : str
+        Directory to write the output files
+    container_clustering_df : Optional[pd.DataFrame]
+        Container clustering assignments DataFrame
+    clustering_metadata_df : Optional[pd.DataFrame]
+        Clustering metadata DataFrame
+    logger : Optional[logging.Logger]
+        Logger instance for logging messages
+        
+    Returns
+    -------
+    bool
+        True if successful, False otherwise
+    """
+    log = logger or logging.getLogger(__name__)
+    all_successful = True
+    files_written = []
+    
+    try:
+        # Ensure output directory exists
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Write container clustering assignments
+        if container_clustering_df is not None and isinstance(container_clustering_df, pd.DataFrame) and not container_clustering_df.empty:
+            clustering_path = os.path.join(output_dir, 'tf_container_clustering.csv')
+            container_clustering_df.to_csv(clustering_path, index=False)
+            files_written.append('tf_container_clustering.csv')
+            log.debug(f"Wrote container clustering assignments: {clustering_path}")
+        
+        # Write clustering metadata
+        if clustering_metadata_df is not None and isinstance(clustering_metadata_df, pd.DataFrame) and not clustering_metadata_df.empty:
+            metadata_path = os.path.join(output_dir, 'tf_clustering_metadata.csv')
+            clustering_metadata_df.to_csv(metadata_path, index=False)
+            files_written.append('tf_clustering_metadata.csv')
+            log.debug(f"Wrote clustering metadata: {metadata_path}")
+        
+        if files_written:
+            log.info(f"Successfully wrote {len(files_written)} TF clustering output files: {', '.join(files_written)}")
+        else:
+            log.debug("No TF clustering outputs to write (all DataFrames were None or empty)")
+            
+        return all_successful
+        
+    except Exception as e:
+        log.error(f"Failed to write TF clustering outputs: {e}", exc_info=True)
+        return False
 
 def save_validated_data(
     working_dir: str,

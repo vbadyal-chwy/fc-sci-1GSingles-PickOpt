@@ -19,7 +19,7 @@ from .data_exchange import (
     normalize_path
 )
 from .utils import load_model_config
-from logging_config import setup_logging, get_workflow_logger
+from pick_optimization.utils.logging_config import setup_logging, get_workflow_logger
 
 # Get module-specific logger - will be enhanced with workflow logging
 logger = get_workflow_logger(__name__, 'tour_formation')
@@ -142,7 +142,7 @@ def run_tour_formation_entrypoint(
                 logger.warning("Orchestrator returned no results in run_complete mode.")
 
         elif mode == 'generate_clusters':
-            clusters, cluster_metadata = orchestrator_result
+            clusters, cluster_metadata, container_target_df = orchestrator_result
             if clusters:
                 logger.info(f"Writing {len(clusters)} subproblems to working directory") 
                 write_subproblems(
@@ -150,6 +150,7 @@ def run_tour_formation_entrypoint(
                     output_dir=output_dir,
                     clusters=clusters,
                     cluster_metadata=cluster_metadata,
+                    container_target_df=container_target_df,
                     logger=logger
                 )
             else:
@@ -157,8 +158,9 @@ def run_tour_formation_entrypoint(
 
         elif mode == 'solve_cluster':
             if orchestrator_result:
+                result_dict, container_target_df = orchestrator_result
                 logger.info(f"Writing result for cluster {cluster_id} to output directory") 
-                write_results(output_dir, [orchestrator_result], logger)
+                write_results(output_dir, [result_dict], logger)
             else:
                 logger.error(f"Orchestrator failed to return a result for cluster {cluster_id} in solve_cluster mode.")
 

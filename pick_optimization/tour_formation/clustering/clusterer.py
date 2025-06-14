@@ -17,7 +17,7 @@ from datetime import datetime
 from .feature_processor import FeatureProcessor
 from .clustering_engine import ClusteringEngine
 from .visualization import Visualizer
-from logging_config import get_logger
+from pick_optimization.utils.logging_config import get_logger
 
 # Get module-specific logger with workflow logging
 logger = get_logger(__name__, 'tour_formation')
@@ -83,7 +83,9 @@ class ContainerClusterer:
         self.cluster_metadata = {}
         
     def cluster_containers(self, container_data: pd.DataFrame, 
-                           slotbook_data: pd.DataFrame) -> Tuple[Dict[str, List[str]], Dict[str, int]]:
+                           slotbook_data: pd.DataFrame,
+                           wh_id: str = None,
+                           planning_datetime: datetime = None) -> Tuple[Dict[str, List[str]], Dict[str, int], pd.DataFrame, pd.DataFrame]:
         """
         Main entry point for container clustering.
         
@@ -93,13 +95,19 @@ class ContainerClusterer:
             DataFrame containing container information
         slotbook_data : pd.DataFrame
             DataFrame containing slotbook/SKU information
+        wh_id : str, optional
+            Warehouse ID for database outputs
+        planning_datetime : datetime, optional
+            Planning datetime for database outputs
             
         Returns
         -------
-        Tuple[Dict[str, List[str]], Dict[str, int]]
+        Tuple[Dict[str, List[str]], Dict[str, int], pd.DataFrame, pd.DataFrame]
             A tuple containing:
             - Dictionary mapping cluster IDs to lists of container IDs
             - Dictionary mapping cluster IDs to number of tours needed
+            - Container clustering assignments DataFrame
+            - Clustering metadata DataFrame
         """
         start_time = time.time()
         self.logger.info("Starting container clustering process")
@@ -138,7 +146,8 @@ class ContainerClusterer:
                 self.logger.info(f"Formed 1 cluster with {len(container_ids)} containers")
                 self.logger.info(f"Total tours required: {num_tours}")
                 
-                return single_cluster, cluster_tours
+                # Return empty DataFrames for single cluster case since we don't generate them here
+                return single_cluster, cluster_tours, pd.DataFrame(), pd.DataFrame()
             
             critical_containers = self._identify_critical_containers(container_data)
             
@@ -153,8 +162,8 @@ class ContainerClusterer:
                 #     else 'All containers fit within capacity'}"
                 # )
                 # Skip to Step 7: Form clusters from all containers
-                clusters = self._handle_standard_clustering_path(
-                    container_data, slotbook_data, container_ids
+                clusters, container_clustering_df, clustering_metadata_df = self._handle_standard_clustering_path(
+                    container_data, slotbook_data, container_ids, wh_id, planning_datetime
                 )
             else:
                 self.logger.info(
@@ -162,8 +171,8 @@ class ContainerClusterer:
                     f"Found {len(critical_containers)} critical containers"
                 )
                 # Follow critical container prioritization path
-                clusters = self._handle_critical_container_path(
-                    container_data, slotbook_data, container_ids, critical_containers
+                clusters, container_clustering_df, clustering_metadata_df = self._handle_critical_container_path(
+                    container_data, slotbook_data, container_ids, critical_containers, wh_id, planning_datetime
                 )
                 
             self.timing_stats['clustering_branch'] = time.time() - start_branch_time
@@ -193,14 +202,14 @@ class ContainerClusterer:
             self.logger.info(f"Formed {len(clusters)} clusters with {sum(len(c) for c in clusters.values())} containers")
             self.logger.info(f"Total tours required: {sum(cluster_tours.values())}")
             
-            return clusters, cluster_tours
+            return clusters, cluster_tours, container_clustering_df, clustering_metadata_df
             
         except Exception as e:
             self.logger.error(f"Error in container clustering: {str(e)}")
             import traceback
             self.logger.error(traceback.format_exc())
-            # Return empty dicts in case of error
-            return {}, {}
+            # Return empty dicts and DataFrames in case of error
+            return {}, {}, pd.DataFrame(), pd.DataFrame()
     
     def _create_cluster_metadata(self, container_data: pd.DataFrame, critical_containers: List[str]) -> None:
         """
@@ -295,7 +304,9 @@ class ContainerClusterer:
     def _handle_standard_clustering_path(self, 
                                         container_data: pd.DataFrame, 
                                         slotbook_data: pd.DataFrame,
-                                        container_ids: List[str]) -> Dict[str, List[str]]:
+                                        container_ids: List[str],
+                                        wh_id: str = None,
+                                        planning_datetime: datetime = None) -> Tuple[Dict[str, List[str]], pd.DataFrame, pd.DataFrame]:
         """
         Handle clustering when no critical containers or all fit within capacity.
         
@@ -307,11 +318,15 @@ class ContainerClusterer:
             DataFrame containing slotbook/SKU information
         container_ids : List[str]
             List of all container IDs to process
+        wh_id : str, optional
+            Warehouse ID for database outputs
+        planning_datetime : datetime, optional
+            Planning datetime for database outputs
             
         Returns
         -------
-        Dict[str, List[str]]
-            Dictionary mapping cluster IDs to lists of container IDs
+        Tuple[Dict[str, List[str]], pd.DataFrame, pd.DataFrame]
+            Tuple containing clusters, container clustering DataFrame, and clustering metadata DataFrame
         """
         start_time = time.time()
         self.logger.info(f"Starting standard clustering path for {len(container_ids)} containers")
@@ -345,11 +360,13 @@ class ContainerClusterer:
             }
             
             # Finalize clusters (renumber and calculate statistics)
-            final_clusters, cluster_stats = self.clustering_engine.finalize_clusters(
+            final_clusters, cluster_stats, container_clustering_df, clustering_metadata_df = self.clustering_engine.finalize_clusters(
                 final_clusters, 
                 [],  # No critical containers in this path
                 container_features,
-                self.containers_per_tour
+                self.containers_per_tour,
+                wh_id=wh_id,
+                planning_datetime=planning_datetime
             )
             
             # Generate visualizations if enabled
@@ -361,19 +378,21 @@ class ContainerClusterer:
                 )
             
             self.timing_stats['standard_clustering_path'] = time.time() - start_time
-            return final_clusters
+            return final_clusters, container_clustering_df, clustering_metadata_df
             
         except Exception as e:
             self.logger.error(f"Error in standard clustering path: {str(e)}")
             import traceback
             self.logger.error(traceback.format_exc())
-            return {}
+            return {}, pd.DataFrame(), pd.DataFrame()
     
     def _handle_critical_container_path(self, 
                                        container_data: pd.DataFrame,
                                        slotbook_data: pd.DataFrame,
                                        container_ids: List[str],
-                                       critical_containers: List[str]) -> Dict[str, List[str]]:
+                                       critical_containers: List[str],
+                                       wh_id: str = None,
+                                       planning_datetime: datetime = None) -> Tuple[Dict[str, List[str]], pd.DataFrame, pd.DataFrame]:
         """
         Handle the full critical container prioritization workflow.
         
@@ -442,7 +461,7 @@ class ContainerClusterer:
             
             if not seed_clusters:
                 self.logger.error("Failed to form seed clusters from critical containers")
-                return {}
+                return {}, pd.DataFrame(), pd.DataFrame()
             
             # Step 3: Calculate cluster centers for the seed clusters
             cluster_centers = self.clustering_engine.calculate_cluster_centers(
@@ -518,15 +537,17 @@ class ContainerClusterer:
                 }
                 
                 # Finalize clusters (renumber and calculate statistics)
-                final_clusters, cluster_stats = self.clustering_engine.finalize_clusters(
+                final_clusters, cluster_stats, container_clustering_df, clustering_metadata_df = self.clustering_engine.finalize_clusters(
                     seed_clusters_only,
                     critical_containers,
                     container_features,
-                    self.containers_per_tour
+                    self.containers_per_tour,
+                    wh_id=wh_id,
+                    planning_datetime=planning_datetime
                 )
                 
                 self.timing_stats['critical_path_full_capacity'] = time.time() - start_time
-                return final_clusters
+                return final_clusters, container_clustering_df, clustering_metadata_df
             
             # Step 7: Handle remaining capacity with additional clusters
             remaining_capacity = (
@@ -569,11 +590,13 @@ class ContainerClusterer:
             }
             
             # Finalize clusters (renumber and calculate statistics)
-            final_clusters, cluster_stats = self.clustering_engine.finalize_clusters(
+            final_clusters, cluster_stats, container_clustering_df, clustering_metadata_df = self.clustering_engine.finalize_clusters(
                 final_clusters,
                 critical_containers,
                 container_features,
-                self.containers_per_tour
+                self.containers_per_tour,
+                wh_id=wh_id,
+                planning_datetime=planning_datetime
             )
             
             # Generate visualizations if enabled
@@ -585,11 +608,11 @@ class ContainerClusterer:
                 )
             
             self.timing_stats['critical_container_path'] = time.time() - start_time
-            return final_clusters
+            return final_clusters, container_clustering_df, clustering_metadata_df
             
         except Exception as e:
             self.logger.error(f"Error in critical container path: {str(e)}")
             import traceback
             self.logger.error(traceback.format_exc())
-            return {}
+            return {}, pd.DataFrame(), pd.DataFrame()
     

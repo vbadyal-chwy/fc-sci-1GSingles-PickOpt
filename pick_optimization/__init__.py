@@ -1,7 +1,8 @@
 """
-Pick Optimization 
+Pick Optimization Module
 
-This package contains modules for tour formation and tour allocation - 1G Multis.
+This module contains algorithms and utilities for optimizing pick operations
+in warehouse fulfillment centers.
 """
 
 __version__ = "1.0.0" 

@@ -50,7 +50,7 @@ def load_data_config() -> Dict[str, Any]:
     parent_dir = Path(__file__).parent
     
     # Define path to config file in the parent directory
-    config_path = parent_dir / "data_load_config.yaml"
+    config_path = parent_dir / "sim_config.yaml"
     
     # Open and safely load the YAML file
     with open(config_path, 'r') as config_file:

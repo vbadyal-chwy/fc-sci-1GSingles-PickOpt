@@ -16,7 +16,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.lines import Line2D
 
-from logging_config import get_logger
+from pick_optimization.utils.logging_config import get_logger
 
 # Get module-specific logger with workflow logging
 logger = get_logger(__name__, 'tour_formation')

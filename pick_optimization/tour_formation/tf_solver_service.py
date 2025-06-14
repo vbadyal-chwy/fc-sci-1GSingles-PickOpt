@@ -15,7 +15,7 @@ from .tf_data import prepare_model_data, ModelData
 from .tf_solver import TourFormationSolver, TourFormationResult
 
 # Get module-specific logger with workflow logging
-from logging_config import get_logger
+from pick_optimization.utils.logging_config import get_logger
 logger = get_logger(__name__, 'tour_formation')
 
 class TourFormationSolverService:
@@ -45,7 +45,8 @@ class TourFormationSolverService:
         skus_df: pd.DataFrame,
         planning_timestamp: datetime, 
         cluster_id: str,
-        cluster_metadata: Dict[str, Any]
+        cluster_metadata: Dict[str, Any],
+        wh_id: str
     ) -> Dict[str, Any]:
         """
         Prepare data, build model, solve, and process results for a single cluster.
@@ -94,7 +95,9 @@ class TourFormationSolverService:
                 container_data=containers_df, 
                 slotbook_data=skus_df,     
                 container_ids=container_ids, 
-                num_tours=num_tours,       
+                num_tours=num_tours,     
+                wh_id = wh_id,
+                planning_datetime = planning_timestamp,
                 logger=self.logger
             )
             if not model_data or not model_data.container_ids: # Check if data prep yielded valid data

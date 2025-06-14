@@ -1,0 +1,51 @@
+#Global Parameters
+global:
+  wh_id: 'AVP1'                      # Warehouse ID 
+  start_time: '2025-05-16 07:15:00'  # Start time of the simulation
+  end_time: '2025-05-17 07:15:00'    # End time of the simulation
+  input_db: 'vertica'                # The options are - vertica, snowflake  
+  mode: 'PickOpt'                    # The options are - Baseline, PickOpt
+  launch_separate: true              # The options are - true, false
+#Note for Queries- adjust timezone by FC; adjust FlexSim seconds offset by start hour.
+
+paths:
+  ta_config: 'simulator/config/tour_allocation_config.yaml'
+  tf_config: 'simulator/config/tour_formation_config.yaml'
+  pending_picks_by_aisle: 'simulator/data/pending_picks_by_aisle.csv'
+  flexsim_inputs: 'simulator/data/flexsim_inputs.xlsx'
+
+pick_optimization:
+  tf_interval_minutes: 30
+  ta_interval_minutes: 5
+  tf_min_containers_in_backlog: 1000
+  target_tours_per_iteration: 5    # Applicable when running without FlexSim.
+  tf_demand_trigger_enabled: true  # Enable demand-based TF triggering
+  # You need to set ta_interval_minutes in FlexSim -> User Events -> PauseSim -> Repeat Event Time
+  
+  # Hybrid Local/Batch Execution Configuration
+  # These settings control whether to run pick optimization components locally or via AWS Batch
+  use_local_tf_cluster: true    # Run TF cluster generation locally (recommended for performance)
+  use_local_ta: true           # Run tour allocation locally (recommended for performance)  
+  use_batch_tf_solve: true     # Keep TF solve as batch for parallelization (recommended)
+  
+  # Performance Notes:
+  # - Local execution eliminates S3 upload/download overhead and AWS Batch cold starts
+  # - TF cluster generation and TA are lightweight operations that benefit from local execution
+  # - TF solve uses parallel batch jobs for compute-intensive optimization across clusters
+
+#Database Configuration
+database:
+  vertica:
+    host: 'bidb.chewy.local'
+    port: 5433
+    database: 'bidb'
+    credentials_file: 'C:/Users/{username}/cred.txt'  # Path to the encrypted credentials file - enter username
+
+  snowflake:
+    account: "CHEWY-CHEWY"
+    user: "{username}@chewy.com"                      # Enter your email here - username@chewy.com       
+    warehouse: "FULFILLMENT_ANALYTICS_WH"
+    authenticator: "externalbrowser"
+    role: "FULFILLMENT_ANALYTICS_USER"
+    database: "EDLDB"
+    schema: "AAD"

@@ -14,7 +14,7 @@ from gurobipy import GRB, Model
 import logging
 
 from .ta_data import ModelData
-from logging_config import get_logger
+from pick_optimization.utils.logging_config import get_logger
 
 # Get module-specific logger with workflow logging
 logger = get_logger(__name__, 'tour_allocation')
@@ -290,6 +290,7 @@ class TourAllocationModel:
         # Calculate metrics
         solution['metrics'] = {
             'total_concurrency': sum(solution['concurrency'].values()),
+            'total_slack': self.total_slack.getValue(),
             'max_concurrency': max(solution['concurrency'].values()),
             'empty_buffer_spots': data.max_buffer_spots - len(set(solution['tour_assignments'].values())),
             'total_aisle_visits': sum(len(buffers) for buffers in solution['aisle_assignments'].values())

@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 import pandas as pd
-from logging_config import get_logger
+from pick_optimization.utils.logging_config import get_logger
 
 # Get module-specific logger with workflow logging
 logger = get_logger(__name__, 'tour_allocation')
@@ -53,7 +53,8 @@ def write_ta_output_data(
     result: Optional[Dict],
     allocation_metrics: Dict,
     container_tours_df: pd.DataFrame,
-    logger: logging.Logger
+    logger: logging.Logger,
+    pending_tours_by_aisle_df: Optional[pd.DataFrame] = None
 ) -> None:
     """Writes the Tour Allocation output files."""
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -81,11 +82,11 @@ def write_ta_output_data(
         aisle_assignments_path = output_dir / 'aisle_assignments.csv'
         aisle_assignments = []
         if result is not None and hasattr(result, 'aisle_assignments') and result.aisle_assignments:
-             for aisle, tour_ids in result.aisle_assignments.items():
-                 for tour_id in tour_ids:
+             for aisle, buffer_ids in result.aisle_assignments.items():
+                 for buffer_id in buffer_ids:
                      aisle_assignments.append({
                          'aisle': aisle,
-                         'tour_id': tour_id
+                         'buffer_id': buffer_id
                      })
              pd.DataFrame(aisle_assignments).to_csv(aisle_assignments_path, index=False)
              logger.debug(f"Aisle assignments written to: {aisle_assignments_path}")
@@ -93,20 +94,78 @@ def write_ta_output_data(
              logger.warning("No aisle assignments found in result to write.")
 
         if buffer_assignments_written:
+            # Write tours_to_release.csv (standard format)
             tours_to_release_path = output_dir / 'tours_to_release.csv'
             tours_to_release_df = container_tours_df[
                 container_tours_df['tour_id'].isin(allocated_tour_ids)
             ]
             tours_to_release_df.to_csv(tours_to_release_path, index=False)
             logger.debug(f"Tours to release details written to: {tours_to_release_path}")
+            
+            # Write ta_tours_to_release.csv (database compatible format)
+            ta_tours_to_release_path = output_dir / 'ta_tours_to_release.csv'
+            ta_tours_to_release_df = tours_to_release_df.copy()
+            # Rename columns to match database schema
+            ta_tours_to_release_df = ta_tours_to_release_df.rename(columns={
+                'sku': 'item_number',
+                'quantity': 'pick_qty',
+                'optimal_pick_location': 'location_id'
+            })
+            ta_tours_to_release_df.to_csv(ta_tours_to_release_path, index=False)
+            logger.debug(f"TA tours to release (database format) written to: {ta_tours_to_release_path}")
         else:
             logger.warning("Buffer assignments were not written, skipping tours_to_release.csv file writing.")
 
     else:
         logger.warning("No allocation result object provided, skipping buffer, aisle assignment, and tours_to_release file writing.")
 
+    # Write pending tours by aisle for database integration (if provided)
+    if pending_tours_by_aisle_df is not None and not pending_tours_by_aisle_df.empty:
+        ta_pending_tours_path = output_dir / 'ta_pending_tours_by_aisle.csv'
+        pending_tours_by_aisle_df.to_csv(ta_pending_tours_path, index=False)
+        logger.debug(f"TA pending tours by aisle written to: {ta_pending_tours_path}")
+
     allocation_metrics_path = output_dir / 'allocation_metrics.csv'
     pd.DataFrame([allocation_metrics]).to_csv(allocation_metrics_path, index=False)
     logger.debug(f"Allocation metrics written to: {allocation_metrics_path}")
+    
+    # Write enhanced allocation metadata for database integration
+    ta_allocation_metadata_path = output_dir / 'ta_allocation_metadata.csv'
+    metadata_for_db = _prepare_allocation_metadata_for_database(allocation_metrics)
+    pd.DataFrame([metadata_for_db]).to_csv(ta_allocation_metadata_path, index=False)
+    logger.debug(f"TA allocation metadata written to: {ta_allocation_metadata_path}")
+    
     logger.info("Tour Allocation output files written.")
+
+
+def _prepare_allocation_metadata_for_database(allocation_metrics: Dict) -> Dict:
+    """
+    Prepare allocation metadata for database storage.
+    
+    Extracts only the fields required for ta_allocation_metadata table:
+    - solve_time
+    - tour_count_target  
+    - tour_count_released
+    - total_aisle_concurrency
+    - maximum_aisle_concurrency
+    - total_slack
+    
+    Parameters
+    ----------
+    allocation_metrics : Dict
+        Full allocation metrics dictionary
+        
+    Returns
+    -------
+    Dict
+        Dictionary with database schema compatible fields
+    """
+    return {
+        'solve_time': allocation_metrics.get('solve_time', 0.0),
+        'tour_count_target': allocation_metrics.get('tour_count_target', 0),
+        'tour_count_released': allocation_metrics.get('tour_count_released', 0),
+        'total_aisle_concurrency': allocation_metrics.get('total_aisle_concurrency', 0),
+        'maximum_aisle_concurrency': allocation_metrics.get('maximum_aisle_concurrency', 0),
+        'total_slack': allocation_metrics.get('total_slack', 0.0)
+    }
 

@@ -13,7 +13,7 @@ from tabulate import tabulate
 
 from .ta_data import ModelData, prepare_model_data
 from .ta_model import TourAllocationModel
-from logging_config import get_logger
+from pick_optimization.utils.logging_config import get_logger
 
 # Get module-specific logger with workflow logging
 logger = get_logger(__name__, 'tour_allocation')

@@ -12,13 +12,14 @@ import pandas as pd
 import numpy as np
 import time
 import math
+from datetime import datetime
 from scipy.cluster.hierarchy import linkage, fcluster
 from sklearn.metrics import silhouette_score
 import os
 
 # Import feature processor
 from .feature_processor import FeatureProcessor
-from logging_config import get_logger
+from pick_optimization.utils.logging_config import get_logger
 
 # Get module-specific logger with workflow logging
 logger = get_logger(__name__, 'tour_formation')
@@ -461,7 +462,9 @@ class ClusteringEngine:
                         clusters: Dict[str, List[str]], 
                         critical_containers: List[str],
                         container_features: Dict[str, Tuple[float, float, int]],
-                        containers_per_tour: int) -> Tuple[Dict[str, List[str]], pd.DataFrame]:
+                        containers_per_tour: int,
+                        wh_id: str = None,
+                        planning_datetime: datetime = None) -> Tuple[Dict[str, List[str]], pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         """
         Finalize clusters with sequential IDs and statistics.
         
@@ -475,11 +478,15 @@ class ClusteringEngine:
             Dictionary mapping container IDs to feature tuples
         containers_per_tour : int
             Maximum containers per tour
+        wh_id : str, optional
+            Warehouse ID for database output
+        planning_datetime : datetime, optional
+            Planning datetime for database output
             
         Returns
         -------
-        Tuple[Dict[str, List[str]], pd.DataFrame]
-            Renumbered clusters with sequential IDs and DataFrame with cluster statistics
+        Tuple[Dict[str, List[str]], pd.DataFrame, pd.DataFrame, pd.DataFrame]
+            Renumbered clusters, cluster statistics DataFrame, container clustering DataFrame, clustering metadata DataFrame
         """
         start_time = time.time()
         self.logger.info("Finalizing clusters with sequential IDs and statistics")
@@ -642,14 +649,67 @@ class ClusteringEngine:
                 container_features
             )
             
+            # Create additional DataFrames for database storage
+            container_clustering_df = pd.DataFrame()
+            clustering_metadata_df = pd.DataFrame()
+            
+            if wh_id and planning_datetime:
+                # Container clustering assignments
+                container_clustering_rows = []
+                for cluster_id, containers in renumbered_clusters.items():
+                    for container_id in containers:
+                        container_clustering_rows.append({
+                            'wh_id': wh_id,
+                            'planning_datetime': planning_datetime,
+                            'cluster_id': cluster_id,
+                            'container_id': container_id
+                        })
+                
+                container_clustering_df = pd.DataFrame(container_clustering_rows)
+                
+                # Clustering metadata with enhanced fields
+                clustering_metadata_rows = []
+                tour_offset = 0  # Calculate tour_id_offset for each cluster
+                
+                # Sort cluster_stats by cluster_id to ensure consistent tour_id_offset calculation
+                sorted_stats = sorted(cluster_stats, key=lambda x: int(x['ClusterID']))
+                
+                for stats in sorted_stats:
+                    cluster_id = stats['ClusterID']
+                    containers = renumbered_clusters[cluster_id]
+                    
+                    # Calculate cluster quality score
+                    quality_score = self._calculate_cluster_quality(containers, container_features)
+                    
+                    clustering_metadata_rows.append({
+                        'wh_id': wh_id,
+                        'planning_datetime': planning_datetime,
+                        'cluster_id': cluster_id,
+                        'total_containers': stats['TotalContainers'],
+                        'critical_containers': stats['CriticalContainers'],
+                        'planned_tour_count': stats['NumTours'],
+                        'min_aisle': int(stats['MinCentroid']) if stats['MinCentroid'] != 0 else None,
+                        'max_aisle': int(stats['MaxCentroid']) if stats['MaxCentroid'] != 0 else None,
+                        'avg_centroid': stats['AvgCentroid'],
+                        'avg_span': stats['AvgSpan'],
+                        'cluster_quality_score': quality_score,
+                        'tour_id_offset': tour_offset,
+                        'total_slack': None  # Will be filled later by solver
+                    })
+                    
+                    # Update tour_offset for the next cluster
+                    tour_offset += stats['NumTours']
+                
+                clustering_metadata_df = pd.DataFrame(clustering_metadata_rows)
+            
             self.timing_stats['finalize_clusters'] = time.time() - start_time
-            return renumbered_clusters, cluster_stats_df
+            return renumbered_clusters, cluster_stats_df, container_clustering_df, clustering_metadata_df
             
         except Exception as e:
             self.logger.error(f"Error finalizing clusters: {str(e)}")
             import traceback
             self.logger.error(traceback.format_exc())
-            return clusters, pd.DataFrame()
+            return clusters, pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
     
     # Helper method to determine optimal number of clusters
     def _determine_optimal_clusters(self, 

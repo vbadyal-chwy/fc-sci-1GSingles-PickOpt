@@ -11,7 +11,7 @@ from typing import Dict, List, Tuple, Any
 from dataclasses import dataclass
 import pandas as pd
 import logging
-from logging_config import get_logger
+from pick_optimization.utils.logging_config import get_logger
 
 # Get module-specific logger with workflow logging
 logger = get_logger(__name__, 'tour_allocation')

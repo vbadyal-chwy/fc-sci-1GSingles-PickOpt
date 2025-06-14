@@ -42,3 +42,7 @@ seaborn>=0.12.0
 scikit-learn>=1.3.0
 
 boto3 >=1.18,<2.0
+
+snowflake-connector-python
+
+openpyxl

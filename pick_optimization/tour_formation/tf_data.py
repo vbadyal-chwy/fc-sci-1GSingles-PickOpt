@@ -6,13 +6,13 @@ Data preparation and preprocessing for tour formation MIP Model.
 # Standard library imports
 import logging
 from dataclasses import dataclass, field
-from typing import Dict, List, Tuple, Any, Optional
+from typing import Dict, List, Tuple, Optional
 
 # Third-party imports
 import pandas as pd
 
 # Get module-specific logger with workflow logging
-from logging_config import get_logger
+from pick_optimization.utils.logging_config import get_logger
 logger = get_logger(__name__, 'tour_formation')
 
 @dataclass
@@ -33,12 +33,16 @@ class ModelData:
     container_fixed_aisles: Dict[str, set] = field(default_factory=dict)  # container -> set of fixed aisles
     slotbook_data: pd.DataFrame = field(default_factory=pd.DataFrame) # Add slotbook_data
     slack_weights: Dict[str, float] = field(default_factory=dict)  # Container ID -> slack weight
+    wh_id: Optional[str] = None  # Warehouse ID
+    planning_datetime: Optional[str] = None  # Planning datetime
 
 def prepare_model_data(
     container_data: pd.DataFrame,
     slotbook_data: pd.DataFrame,
     container_ids: List[str] = None,
     num_tours: int = None,
+    wh_id: str = None,
+    planning_datetime: str = None,
     logger: Optional[logging.Logger] = None
 ) -> ModelData:
     """
@@ -55,6 +59,10 @@ def prepare_model_data(
         Optional list of specific container IDs to include in the optimization
     num_tours : Optional[int]
         Number of tours to create, if None will be calculated based on container count
+    wh_id : Optional[str]
+        Warehouse ID for tracking purposes
+    planning_datetime : Optional[str]
+        Planning datetime for tracking purposes
     logger : Optional[logging.Logger]
         Logger instance for logging messages
         
@@ -163,7 +171,9 @@ def prepare_model_data(
             multi_location_skus=multi_location_skus,
             container_fixed_aisles=container_fixed_aisles,
             slotbook_data=slotbook_data,
-            slack_weights=slack_weights
+            slack_weights=slack_weights,
+            wh_id=wh_id,
+            planning_datetime=planning_datetime
         )
         
     except Exception as e:

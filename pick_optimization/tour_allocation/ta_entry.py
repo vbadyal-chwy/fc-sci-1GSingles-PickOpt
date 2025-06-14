@@ -11,7 +11,7 @@ from .utils import normalize_path, load_model_config
 from .ta_data_exchange import load_ta_input_data, write_ta_output_data
 from .ta_main import run_tour_allocation
 from .tour_buffer import TourBuffer
-from logging_config import setup_logging, get_workflow_logger
+from pick_optimization.utils.logging_config import setup_logging, get_workflow_logger
 
 # --- Entrypoint ---
 
@@ -89,7 +89,7 @@ def run_tour_allocation_entrypoint(
 
         if container_tours_df.empty:
             logger.warning("No container tours found. Skipping tour allocation.")
-            write_ta_output_data(output_dir, None, {'status': 'No container tours found'}, container_tours_df, logger)
+            write_ta_output_data(output_dir, None, {'status': 'No container tours found'}, container_tours_df, logger, None)
             return
 
         tour_buffer = TourBuffer(config, logger)
@@ -126,18 +126,31 @@ def run_tour_allocation_entrypoint(
             'total_tours_allocated': 0,
             'current_buffer_size': current_buffer, 
             'tours_released_request': tours_to_release,
+            'tour_count_target': tours_to_release,  # For database schema compatibility
             'max_aisle_concurrency': 0,
+            'solve_time': 0.0,
+            'tour_count_released': 0,
+            'total_aisle_concurrency': 0,
+            'maximum_aisle_concurrency': 0,
+            'total_slack': 0.0,
             'status': 'Started'
         }
 
         if tours_to_release <= 0:
             logger.warning(f"No tours to release (target: {tours_to_release}). Stopping allocation.")
             allocation_metrics['status'] = 'No tours to release'
-            write_ta_output_data(output_dir, None, allocation_metrics, container_tours_df, logger)
-            return 
+            allocation_metrics['tour_count_target'] = tours_to_release
+            allocation_metrics['tour_count_released'] = 0
+            write_ta_output_data(output_dir, None, allocation_metrics, container_tours_df, logger, pending_tours_by_aisle_df)
+            return
 
         # Run tour allocation main logic
         logger.info(f"Running core tour allocation for {tours_to_release} tours...")
+        
+        # Track solve time
+        import time
+        solve_start_time = time.time()
+        
         result = run_tour_allocation(
             unassigned_tours=unassigned_tours,
             tours_to_release=tours_to_release,
@@ -145,33 +158,53 @@ def run_tour_allocation_entrypoint(
             config=config,
             logger=logger
         )
+        
+        solve_end_time = time.time()
+        solve_time = solve_end_time - solve_start_time
 
         if result:
             allocation_metrics['total_tours_allocated'] = len(result.buffer_assignments)
-            if result.aisle_assignments:
-                 allocation_metrics['max_aisle_concurrency'] = max(len(tours) for tours in result.aisle_assignments.values())
+            allocation_metrics['tour_count_released'] = len(result.buffer_assignments)  
+            allocation_metrics['solve_time'] = solve_time
+            
+            # Use pre-calculated metrics from model solution (FIXED)
+            # result.metrics contains the correct concurrency calculations
+            allocation_metrics['maximum_aisle_concurrency'] = result.metrics.get('max_concurrency', 0)
+            allocation_metrics['total_aisle_concurrency'] = result.metrics.get('total_concurrency', 0)
+            allocation_metrics['max_aisle_concurrency'] = allocation_metrics['maximum_aisle_concurrency']  # For backward compatibility
+            
+            # Calculate total slack from aisle ranges for selected tours
+            total_slack = result.metrics.get('total_slack', 0)
+            
+            allocation_metrics['total_slack'] = total_slack
             allocation_metrics['status'] = 'Completed'
             logger.info("Tour allocation core logic finished successfully.")
         else:
-            logger.warning("No solution found by tour allocation core logic.")
+            allocation_metrics['solve_time'] = solve_time
+            allocation_metrics['tour_count_released'] = 0
+            allocation_metrics['max_aisle_concurrency'] = 0
+            allocation_metrics['maximum_aisle_concurrency'] = 0
+            allocation_metrics['total_aisle_concurrency'] = 0
+            allocation_metrics['total_slack'] = 0.0
             allocation_metrics['status'] = 'No solution found'
+            logger.warning("No solution found by tour allocation core logic.")
 
         # Write output data using helper
-        write_ta_output_data(output_dir, result, allocation_metrics, container_tours_df, logger)
+        write_ta_output_data(output_dir, result, allocation_metrics, container_tours_df, logger, pending_tours_by_aisle_df)
 
         logger.info("Tour Allocation entrypoint finished.")
 
     except FileNotFoundError as fnf_error:
         logger.error(f"Input file not found: {str(fnf_error)}")
         try:
-            write_ta_output_data(output_dir, None, {'status': f'Input file error: {fnf_error}'}, pd.DataFrame(), logger)
+            write_ta_output_data(output_dir, None, {'status': f'Input file error: {fnf_error}'}, pd.DataFrame(), logger, None)
         except Exception as write_err:
             logger.error(f"Failed to write error status metrics: {write_err}")
         raise
     except Exception as e:
         logger.error(f"Error in tour allocation entrypoint: {str(e)}", exc_info=True)
         try:
-            write_ta_output_data(output_dir, None, {'status': f'Runtime error: {e}'}, pd.DataFrame(), logger) 
+            write_ta_output_data(output_dir, None, {'status': f'Runtime error: {e}'}, pd.DataFrame(), logger, None) 
         except Exception as write_err:
             logger.error(f"Failed to write error status metrics: {write_err}")
         raise 

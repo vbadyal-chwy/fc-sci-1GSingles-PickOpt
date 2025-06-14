@@ -8,7 +8,7 @@ from pathlib import Path
 from datetime import datetime
 from tour_formation.tf_entry import run_tour_formation_entrypoint
 from tour_allocation.ta_entry import run_tour_allocation_entrypoint
-from logging_config import setup_logging
+from pick_optimization.utils.logging_config import setup_logging
 
 # Initialize basic logger - will be enhanced once config is loaded
 logger = logging.getLogger(__name__)
@@ -33,32 +33,12 @@ def load_config(entry_type: str) -> dict:
         raise
 
 def main():
-    # ------------This part is for local hosting the model only------------------
-    # if len(sys.argv) < 2:
-    #     print("Usage: python main.py '<json_params>'")
-    #     sys.exit(1)
 
-    # try:
-    #     params = json.loads(sys.argv[1])
-    # except json.JSONDecodeError:
-    #     print("Invalid JSON input")
-    #     sys.exit(1)
-
-    # entry_type = params.get("entry_point_type")
-    # if entry_type == "tour_formation":
-    #     run_tour_formation_entrypoint(params)
-    # elif entry_type == "tour_allocation":
-    #     run_tour_allocation_entrypoint(params)
-    # else:
-    #     print(f"Unknown entry_point_type: {entry_type}")
-    #     sys.exit(1)
-    
     # Get input parameters first to determine entry type for config loading
     s3_dir = Path("pick_optimization/s3_data")
     s3_dir.mkdir(parents=True, exist_ok=True)
     input_str = os.environ.get("ENTRY_PARAMS") or (sys.argv[1] if len(sys.argv) > 1 else None)
     if not input_str:
-        # Use basic logger since we haven't initialized centralized logging yet
         print("Usage: pass JSON as env var ENTRY_PARAMS or as first argument.")
         sys.exit(1)
 
@@ -94,7 +74,7 @@ def main():
     dt = datetime.strptime(iso_string, "%Y-%m-%dT%H:%M:%S")
     formatted = dt.strftime("%Y%m%d_%H%M%S")
     if entry_type == "tour_formation":
-        # from tour_formation.tf_entry import run_tour_formation_entrypoint
+        
         logger.info(f"Starting tour formation with params: {params}")
         run_tour_formation_entrypoint(
             mode = entry_point_params.get("mode"),
@@ -111,7 +91,7 @@ def main():
         )
 
     elif entry_type == "tour_allocation":
-        # from tour_allocation.ta_entry import run_tour_allocation_entrypoint
+        
         logger.info(f"Starting tour allocation with params: {params}")
         entry_point_params = params.get("params")
         run_tour_allocation_entrypoint(
