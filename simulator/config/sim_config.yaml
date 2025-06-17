@@ -11,13 +11,14 @@ global:
 paths:
   ta_config: 'simulator/config/tour_allocation_config.yaml'
   tf_config: 'simulator/config/tour_formation_config.yaml'
-  pending_picks_by_aisle: 'simulator/data/pending_picks_by_aisle.csv'
-  flexsim_inputs: 'simulator/data/flexsim_inputs.xlsx'
+  pending_tours_by_aisle: '{absolute path to your file}'
+  flexsim_input: '{absolute path to your file}'
+  labor_data: '{absolute path to your file}'
 
 pick_optimization:
   tf_interval_minutes: 30
   ta_interval_minutes: 5
-  tf_min_containers_in_backlog: 1000
+  tf_min_containers_in_backlog: 500
   target_tours_per_iteration: 5    # Applicable when running without FlexSim.
   tf_demand_trigger_enabled: true  # Enable demand-based TF triggering
   # You need to set ta_interval_minutes in FlexSim -> User Events -> PauseSim -> Repeat Event Time

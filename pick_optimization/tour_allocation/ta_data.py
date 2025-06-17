@@ -73,8 +73,22 @@ def prepare_model_data(
         # Get aisles from pending tours
         pending_aisles = pending_tours_by_aisle['aisle'].unique()
         
-        # Combine and get unique sorted list of all aisles
-        aisles = sorted(list(set(pool_aisles) | set(pending_aisles)))
+        # Convert both aisle arrays to integers to ensure data type consistency
+        # Handle the case where pending_aisles are floats (like 11.0) and pool_aisles are ints (like 11)
+        
+        # Convert pool_aisles to integers (they're numpy arrays from .unique(), so convert to Series first)
+        pool_aisles = pd.Series(pool_aisles)
+        pool_aisles = pd.to_numeric(pool_aisles, errors='coerce').dropna().astype(int)
+        
+        # Convert pending_aisles to integers, handling the float case properly
+        pending_aisles = pd.Series(pending_aisles)
+        pending_aisles = pd.to_numeric(pending_aisles, errors='coerce').dropna().astype(int)
+        
+        logger.debug(f"Pool aisles (int): {sorted(pool_aisles.tolist())}")
+        logger.debug(f"Pending aisles (int): {sorted(pending_aisles.tolist())}")
+        
+        # Combine and get unique sorted list of all aisles - now both are guaranteed to be integers
+        aisles = sorted(list(set(pool_aisles.tolist()) | set(pending_aisles.tolist())))
         
         # Create tour-aisle visit matrix
         tour_aisle_visits = {}

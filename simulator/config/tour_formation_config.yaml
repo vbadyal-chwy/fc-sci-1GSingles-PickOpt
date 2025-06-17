@@ -5,7 +5,7 @@ global:
   wh_id: 'AVP1'                              # Warehouse ID 
   avg_pick_uph: 50                           # Average pick units per hour
   container_target_variability_factor: 1.2   # Variability factor
-  tf_min_containers_in_backlog: 1000         # Minimum number of containers in backlog to trigger TF
+  tf_min_containers_in_backlog: 500         # Minimum number of containers in backlog to trigger TF
 
 # Slack Calculation Parameters (change by FC)
 slack_calculation:
@@ -13,8 +13,8 @@ slack_calculation:
   other_time_buffer: 60              # minutes for grooming, packing, shipping
   travel_time_constant: 5            # minutes per aisle
   aisle_crossing_factor: 20          # factor for crossing aisles vs traveling in aisles
-  critical_slack_threshold: 0
-  urgent_slack_threshold: 60
+  critical_slack_threshold: 140
+  urgent_slack_threshold: 180
   avg_cycle_time: 150                # Average cycle time in minutes
   avg_time_to_prepare_tour: 5        # Average time to prepare a tour in minutes
   weights:

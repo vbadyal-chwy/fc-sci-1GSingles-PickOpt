@@ -448,7 +448,7 @@ def create_ta_inputs(execution_id: str, planning_timestamp: datetime, config: di
         # Setup paths
         base_input_dir = project_root / "pick_optimization" / "input"
         ta_config_path = project_root / config['paths']['ta_config']
-        data_dir = project_root / "simulator" / "data"
+        pending_tours_file_path = Path(config['paths']['pending_tours_by_aisle'])
         
         # Create TA inputs from database
         ta_input_dir = create_ta_inputs_from_database(
@@ -458,7 +458,7 @@ def create_ta_inputs(execution_id: str, planning_timestamp: datetime, config: di
             wh_id=wh_id,
             base_input_dir=base_input_dir,
             tour_allocation_config_path=ta_config_path,
-            data_dir=data_dir,
+            pending_tours_file_path=pending_tours_file_path,
             logger=logger
         )
         

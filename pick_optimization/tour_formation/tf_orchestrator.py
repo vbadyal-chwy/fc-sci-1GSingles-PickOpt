@@ -104,8 +104,10 @@ def calculate_container_target(
     logger.info(f"TF trigger evaluation: {backlog_container_count} >= {tf_min_containers_in_backlog} = {trigger_tf_flag}")
     
     if not trigger_tf_flag:
-        logger.info(f"TF will be skipped: backlog container count ({backlog_container_count}) "
-                   f"is below minimum threshold ({tf_min_containers_in_backlog})")
+        trigger_tf_flag = True
+        logger.warning(f"TF trigger flag inside TA orchestrator overridden to True: backlog container count ({backlog_container_count}) ")
+        #logger.info(f"TF will be skipped: backlog container count ({backlog_container_count}) "
+        #           f"is below minimum threshold ({tf_min_containers_in_backlog})")
     
     # Step 3: Base target calculation
     base_target = active_pickers * (avg_pick_uph / avg_container_upc)
