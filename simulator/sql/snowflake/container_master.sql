@@ -34,8 +34,8 @@ with warehouse_config as (
     where pc.wh_id = %s        -- wh_id
     and convert_timezone('UTC', wc.time_zone, pc.arrive_date) between %s and %s        -- start_time and end_time
     and pc.status = 'SHIPPED'
-    and pc.profile_name = 'All'
-    and pc.process_path = 'Multis'
+    and pc.profile_name = 'Singles'
+    and pc.process_path = 'Singles'
 )
 
 ,containers_charged_before_batched_after as (
@@ -53,8 +53,8 @@ with warehouse_config as (
     and convert_timezone('UTC', wc.time_zone, pc.arrive_date) < %s        -- start_time
     and ar.autobatched_date_local >= %s        -- start_time
     and pc.status = 'SHIPPED'
-    and pc.profile_name = 'All'
-    and pc.process_path = 'Multis'
+    and pc.profile_name = 'Singles'
+    and pc.process_path = 'Singles'
 )
 
 ,combined_containers as (

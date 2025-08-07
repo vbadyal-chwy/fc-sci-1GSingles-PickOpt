@@ -9,11 +9,13 @@
 output/
 input/
 working/
+Docs/
 
 # Python-specific ignores
 __pycache__/
 *.py[cod]
 *$py.class
+*.ipynb
 
 # Virtual environment
 pickopt-env/
@@ -38,5 +40,8 @@ Thumbs.db
 
 # LocalDatabase
 *.db
+
+#csv files
+*.csv
 
 

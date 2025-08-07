@@ -260,9 +260,12 @@ class SlackCalculator:
             # Phase 2: Pre-compute lookups and waiting times
             lookup_start = time.time()
             
+            #TODO: Do not need this element
             # Get configuration parameters
-            buffer_wait_minutes = self.config['slack_calculation']['buffer_variability_factor'] * \
-                self.config['slack_calculation']['avg_time_to_prepare_tour']
+            # buffer_wait_minutes = self.config['slack_calculation']['buffer_variability_factor'] * \
+            #     self.config['slack_calculation']['avg_time_to_prepare_tour']
+
+            buffer_wait_minutes = 0
             
             # Create optimized lookups
             sku_aisle_lookup, sku_inventory_lookup = self._create_sku_lookups(result_df, slotbook_data)

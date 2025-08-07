@@ -64,9 +64,12 @@ class TourFormationModel:
         pick_config = config['tour_formation']
         self.min_containers_per_tour = pick_config['min_containers_per_tour']
         self.max_containers_per_tour = pick_config['max_containers_per_tour']
+        self.max_vol_per_tour = pick_config['max_vol_per_tour']
+        self.min_vol_per_tour = pick_config['min_vol_per_tour']
 
         self.early_termination_seconds = pick_config['early_termination_seconds']
         self.travel_distance_weight = pick_config['travel_distance_weight']
+        self.num_tours_weight = pick_config['num_tours_weight']
         self.max_cluster_size = config['clustering']['max_cluster_size']
         
         # --- Gurobi Config Handling ---
@@ -278,7 +281,7 @@ class TourFormationModel:
         """Add constraints ensuring each container is assigned to exactly one tour"""
         m = self.model
         data = self.model_data
-        
+
         for i in data.container_ids:
             m.addConstr(
                 gp.quicksum(self.x[i,k] for k in data.tour_indices) <= 1,
@@ -293,52 +296,15 @@ class TourFormationModel:
         m = self.model
         data = self.model_data
         
-        if data.is_last_iteration:
+        # Maximum capacity for all tours
+        for k in data.tour_indices:
+            m.addConstr(gp.quicksum(self.x[i,k]*sum(data.sku_volume[(c_id,s)] for (c_id,s) in data.sku_volume.keys() if c_id == i) for i in data.container_ids) 
+                        <= self.max_vol_per_tour * self.u[k], name=f"tourcapacityupper_{k}")
             
-            max_possible_tours = len(data.tour_indices)
-            m.addConstr(
-                gp.quicksum(self.u[k] for k in data.tour_indices) == max_possible_tours,
-                name="maxtours"
-            )
-            # Maximum capacity for all tours
-            for k in data.tour_indices:
-                m.addConstr(
-                    gp.quicksum(self.x[i,k] for i in data.container_ids) <= 
-                    self.max_containers_per_tour * self.u[k],
-                    name=f"tourcapacityupper_{k}"
-                )
-                    
-            remaining_containers = len(data.container_ids)
-            for k in data.tour_indices:
-                # If we have enough containers, enforce regular minimum
-                if remaining_containers >= self.min_containers_per_tour:
-                    m.addConstr(
-                        gp.quicksum(self.x[i,k] for i in data.container_ids) >= 
-                        self.min_containers_per_tour * self.u[k],
-                        name=f"tourcapacitylower_{k}"
-                    )
-                    remaining_containers -= self.min_containers_per_tour
-                # For the last tour(s), use remaining containers as minimum
-                else:
-                    m.addConstr(
-                        gp.quicksum(self.x[i,k] for i in data.container_ids) >= 
-                        remaining_containers * self.u[k],
-                        name=f"tourcapacitylower_{k}"
-                    )
-        else: 
-            max_possible_tours = len(data.tour_indices)
-            m.addConstr(
-                gp.quicksum(self.u[k] for k in data.tour_indices) == max_possible_tours,
-                name="maxtours"
-            )
-            for k in data.tour_indices:
-
-                # Force full capacity for non-final iterations
-                m.addConstr(
-                    gp.quicksum(self.x[i,k] for i in data.container_ids) == 
-                    self.max_containers_per_tour * self.u[k],
-                    name=f"tourcapacityfull_{k}"
-                )
+        # Minimum capacity for all tours
+        for k in data.tour_indices:
+            m.addConstr(gp.quicksum(self.x[i,k]*sum(data.sku_volume[(c_id,s)] for (c_id,s) in data.sku_volume.keys() if c_id == i) for i in data.container_ids) 
+                        >= self.min_vol_per_tour * self.u[k], name=f"tourcapacitylower_{k}")
     
     def _add_sku_fulfillment_constraints(self) -> None:
         """
@@ -382,7 +348,7 @@ class TourFormationModel:
                         if (i,s) in data.container_sku_qty
                     ) <= data.aisle_inventory[(s,a)],
                     name=f"inventory_single_{s}_{a}"
-                )
+                   )
         
         # For multi-location SKUs
         for s in data.multi_location_skus:
@@ -396,7 +362,7 @@ class TourFormationModel:
                             if (i,s) in data.container_sku_qty and (i,s,a,k) in self.y
                         ) <= data.aisle_inventory[(s,a)],
                         name=f"inventory_multi_{s}_{a}"
-                    )
+                    )   
     
     def _add_aisle_visit_linking_constraints(self) -> None:
         """
@@ -615,11 +581,11 @@ class TourFormationModel:
         self.travel_distance = self.travel_distance_weight * self.distinct_aisles + self.aisle_span
         
         # 3. Tour count component (γ)
-        self.tour_count = gp.quicksum(self.u[k] for k in data.tour_indices)
+        self.tour_count = self.num_tours_weight * gp.quicksum(self.u[k] for k in data.tour_indices)
         
         # Set complete objective
         m.setObjective(
-            - self.slack + 
+            -self.slack + 
             self.travel_distance, 
             GRB.MINIMIZE
         )
@@ -880,6 +846,7 @@ class TourFormationModel:
                                     'tour_id': tour_id,  # Simple integer format
                                     'container_id': i,
                                     'item_number': pick['sku'],
+                                    'sku_volume': data.sku_volume.get((i, pick['sku']), 0),
                                     'pick_location': location_info['location_id'] if location_info is not None else None,
                                     'sequence_order': sequence_counter[tour_id],
                                     'pick_quantity': pick['quantity']

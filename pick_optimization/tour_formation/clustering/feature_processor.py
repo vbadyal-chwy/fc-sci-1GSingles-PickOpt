@@ -41,11 +41,12 @@ class FeatureProcessor:
         # Extract relevant configuration
         self.feature_config = config.get('feature_engineering', {})
         
+        #TODO: Weights hard coded here. Why not through config?
         # Feature weights configuration
         self.weights = self.feature_config.get('weights', {
             'centroid': 1.0,
-            'span': 0.5,
-            'distinct_aisles': 0.5
+            'span': 0.0,
+            'distinct_aisles': 0.0
         })
         
         # Use secondary feature as span or distinct aisles
@@ -265,6 +266,7 @@ class FeatureProcessor:
                 if c_id in container_features:
                     centroid, span, distinct_aisles = container_features[c_id]
                     
+                    #TODO: Feature weights used here.
                     # Use either aisle span or distinct aisles as second feature
                     second_feature = distinct_aisles if self.use_distinct_aisles else span
                     
@@ -272,7 +274,7 @@ class FeatureProcessor:
                     weighted_centroid = centroid * self.weights.get('centroid', 1.0)
                     weighted_second = (
                         second_feature * self.weights.get('distinct_aisles' 
-                                                          if self.use_distinct_aisles else 'span', 0.5)
+                                                          if self.use_distinct_aisles else 'span', 0)
                     )
                     
                     feature_arrays.append([weighted_centroid, weighted_second])

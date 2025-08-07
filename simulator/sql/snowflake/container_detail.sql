@@ -31,8 +31,8 @@ with warehouse_config as (
     where pc.wh_id = %s        -- wh_id
     and convert_timezone('UTC', wc.time_zone, pc.arrive_date) between %s and %s        -- start_time and end_time
     and pc.status = 'SHIPPED'
-    and pc.profile_name = 'All'
-    and pc.process_path = 'Multis'
+    and pc.profile_name = 'Singles'
+    and pc.process_path = 'Singles'
     
     union
     
@@ -49,8 +49,8 @@ with warehouse_config as (
     and convert_timezone('UTC', wc.time_zone, pc.arrive_date) < %s        -- start_time
     and ar.autobatched_date_local >= %s        -- start_time
     and pc.status = 'SHIPPED'
-    and pc.profile_name = 'All'
-    and pc.process_path = 'Multis'
+    and pc.profile_name = 'Singles'
+    and pc.process_path = 'Singles'
 )
 
 -- Final result with pick details
@@ -65,7 +65,8 @@ select distinct
     loc.aisle_sequence,
     loc.aisle_name,
     loc.picking_flow_as_int,
-    null as optimized_pick_location
+    null as optimized_pick_location,
+    vol.unit_volume
 from eligible_containers ec
 join edldb.aad.t_pick_detail tpd 
     on ec.wh_id = tpd.wh_id 
@@ -79,5 +80,8 @@ left join edldb.aad.t_fwd_pick fwd
 left join edldb.aad.t_zone_loca zl 
     on ec.wh_id = zl.wh_id 
     and tpd.pick_location = zl.location_id
+left join edldb.aad.t_item_uom vol
+    on ec.wh_id = vol.wh_id
+    and tpd.item_number = vol.item_number
 where zl.zone = 'GROUND'
 order by ec.container_id, tpd.item_number;

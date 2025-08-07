@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS container_details (
     aisle_sequence INTEGER,
     aisle_name TEXT,
     picking_flow_as_int INTEGER,
+    unit_volume REAL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (execution_id, container_id, pick_id),
     FOREIGN KEY (execution_id, container_id) REFERENCES containers(execution_id, container_id) ON DELETE CASCADE
@@ -184,6 +185,7 @@ CREATE TABLE IF NOT EXISTS tf_tour_formation (
     tour_id TEXT NOT NULL,
     container_id TEXT NOT NULL,
     item_number TEXT NOT NULL,
+    sku_volume REAL,
     pick_location TEXT,
     sequence_order INTEGER,
     pick_quantity INTEGER,

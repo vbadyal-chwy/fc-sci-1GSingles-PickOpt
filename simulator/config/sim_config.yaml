@@ -40,11 +40,11 @@ database:
     host: 'bidb.chewy.local'
     port: 5433
     database: 'bidb'
-    credentials_file: 'C:/Users/{username}/cred.txt'  # Path to the encrypted credentials file - enter username
+    credentials_file: 'C:/Users/vbadyal/cred.txt'  # Path to the encrypted credentials file - enter username
 
   snowflake:
     account: "CHEWY-CHEWY"
-    user: "{username}@chewy.com"                      # Enter your email here - username@chewy.com       
+    user: "vbadyal@chewy.com"                      # Enter your email here - username@chewy.com       
     warehouse: "FULFILLMENT_ANALYTICS_WH"
     authenticator: "externalbrowser"
     role: "FULFILLMENT_ANALYTICS_USER"

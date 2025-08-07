@@ -360,16 +360,18 @@ class ClusteringEngine:
         avg_centroid_dist = np.mean(centroid_dists)
         avg_span_dist = np.mean(span_dists)
         
+        #TODO: Quality score calculation using span
         # Combine into a quality score (higher is better)
         # We want clusters with low dispersion (standard deviation)
         # and low average distance from center
         
         # Scaling factors to balance the components
         centroid_factor = 0.5
-        span_factor = 0.5  # Equal weight for span
+        span_factor = 0.0  # Equal weight for span
         
+        #TODO: Max cluster size
         # Size factor - prefer larger clusters up to max_cluster_size
-        max_size = 200  # Reference size
+        max_size = 500  # Reference size
         size_score = min(len(valid_containers) / max_size, 1.0)
         
         # Inverse of weighted sum (smaller values = higher quality)

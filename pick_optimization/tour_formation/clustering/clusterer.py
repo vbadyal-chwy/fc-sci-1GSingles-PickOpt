@@ -57,6 +57,7 @@ class ContainerClusterer:
         self.clustering_config = config.get('clustering', {})
         self.max_cluster_size = self.clustering_config['max_cluster_size']
         self.containers_per_tour = self.config['tour_formation']['max_containers_per_tour']
+        #self.min_vol_per_tour = self.config['tour_formation']['min_vol_per_tour']
         self.max_picking_capacity = container_target
         
         # Create visualization path if needed
@@ -128,7 +129,7 @@ class ContainerClusterer:
                 # Create single cluster with all containers
                 single_cluster = {'1': container_ids}
                 # Calculate tours needed
-                num_tours = math.ceil(len(container_ids) / self.containers_per_tour)
+                num_tours = math.ceil(sum(container_ids) / self.containers_per_tour)
                 cluster_tours = {'1': num_tours}
                 
                 # Store results for later reference
@@ -202,6 +203,7 @@ class ContainerClusterer:
             self.logger.info(f"Formed {len(clusters)} clusters with {sum(len(c) for c in clusters.values())} containers")
             self.logger.info(f"Total tours required: {sum(cluster_tours.values())}")
             
+            #TODO: update metadata info about how number of tours are formed
             return clusters, cluster_tours, container_clustering_df, clustering_metadata_df
             
         except Exception as e:

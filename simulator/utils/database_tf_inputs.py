@@ -56,7 +56,7 @@ def create_tf_inputs_from_database(
             container_query = """
             SELECT c.wh_id, c.container_id, c.priority, c.arrive_datetime, 
                    c.original_promised_pull_datetime as pull_datetime, cd.item_number, 
-                   cd.planned_quantity as pick_quantity, cd.pick_location as wms_pick_location, cd.aisle_sequence, cd.picking_flow_as_int
+                   cd.planned_quantity as pick_quantity, cd.pick_location as wms_pick_location, cd.aisle_sequence, cd.picking_flow_as_int, cd.unit_volume
             FROM containers c 
             JOIN container_details cd ON c.wh_id = cd.wh_id AND c.container_id = cd.container_id
             WHERE c.execution_id = ? 

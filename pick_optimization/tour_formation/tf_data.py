@@ -1,6 +1,5 @@
 """
 Data preparation and preprocessing for tour formation MIP Model.
-
 """
 
 # Standard library imports
@@ -24,6 +23,7 @@ class ModelData:
     sku_aisles: Dict[str, List[int]]
     sku_min_aisle: Dict[str, List[int]]
     sku_max_aisle: Dict[str, List[int]]
+    sku_volume: Dict[Tuple[str, str], float] #TODO:container -> volume
     aisle_inventory: Dict[Tuple[str, int], int]
     tour_indices: List[int]  
     max_aisle: int
@@ -90,7 +90,12 @@ def prepare_model_data(
         # Create container-SKU quantity mapping
         container_sku_qty = {}
         for _, row in filtered_container_data.iterrows():
-            container_sku_qty[(row['container_id'], row['item_number'])] = row['pick_quantity']
+            container_sku_qty[(row['container_id'], row['item_number'])] = row['pick_quantity']    
+
+        # Create container-SKU quantity mapping
+        sku_volume = {}
+        for _, row in filtered_container_data.iterrows():
+            sku_volume[(row['container_id'], row['item_number'])] = row['unit_volume'] 
         
         # Create SKU-Aisle mapping and classify SKUs by location count
         sku_aisles = {}
@@ -164,6 +169,7 @@ def prepare_model_data(
             sku_aisles=sku_aisles,
             sku_min_aisle=sku_min_aisle,
             sku_max_aisle=sku_max_aisle,
+            sku_volume=sku_volume,
             aisle_inventory=aisle_inventory,
             tour_indices=tour_indices,
             max_aisle=max_aisle,

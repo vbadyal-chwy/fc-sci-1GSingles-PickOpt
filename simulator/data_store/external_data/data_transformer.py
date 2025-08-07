@@ -126,6 +126,7 @@ class DataTransformer:
         transformed['aisle_sequence'] = pd.to_numeric(raw_data.get('AISLE_SEQUENCE'), errors='coerce')
         transformed['aisle_name'] = raw_data.get('AISLE_NAME', '')
         transformed['picking_flow_as_int'] = pd.to_numeric(raw_data.get('PICKING_FLOW_AS_INT'), errors='coerce')
+        transformed['unit_volume'] = pd.to_numeric(raw_data.get('UNIT_VOLUME'), errors='coerce')
         transformed['created_at'] = datetime.now()
         
         # Debug: Check execution_id before filtering
