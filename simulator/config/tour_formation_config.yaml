@@ -3,7 +3,7 @@
 # Global Parameters
 global:
   wh_id: 'AVP1'                              # Warehouse ID 
-  avg_pick_uph: 80                           # Average pick units per hour
+  avg_pick_uph: 120                           # Average pick units per hour
   container_target_variability_factor: 1.2   # Variability factor
   tf_min_containers_in_backlog: 500         # Minimum number of containers in backlog to trigger TF
 
@@ -42,7 +42,7 @@ feature_engineering:
   use_distinct_aisles: false        # Whether to use distinct aisles as a feature
 
 clustering:
-  max_cluster_size: 500              # Maximum cluster size / Max MIP Problem Size
+  max_cluster_size: 132966              # Maximum cluster size / Max MIP Problem Size
   min_clusters: 2                  # Minimum number of clusters to form
   max_clusters: 10                 # Maximum number of clusters to form
   linkage_method: 'ward'           # Hierarchical clustering linkage method (ward, complete, average, single)
@@ -59,8 +59,10 @@ tour_formation:
   early_termination_seconds: 60      # Early termination time in seconds
   travel_distance_weight: 20.0        # Weight for travel distance in objective function
   num_tours_weight: 5.0             # Weight for travel distance in objective function
-  max_vol_per_tour: 66000.0          # Maximum volume per tour in cubic inches
-  min_vol_per_tour: 33000.0          # Minimum volume per tour in cubic inches
+  max_vol_per_tour: 66966.0          # Maximum volume per tour in cubic inches
+  min_vol_per_tour: 33483.0          # Minimum volume per tour in cubic inches
+  max_stops_per_tour: 90            # Maximum number of stops per tour
+  buffer_tours_TF_model: 2           # Buffer tours in the model to allow for flexibility
  
 
   solver:

@@ -284,7 +284,7 @@ class TourFormationModel:
 
         for i in data.container_ids:
             m.addConstr(
-                gp.quicksum(self.x[i,k] for k in data.tour_indices) <= 1,
+                gp.quicksum(self.x[i,k] for k in data.tour_indices) == 1,
                 name=f"singletour_{i}"
             )
             
@@ -301,10 +301,12 @@ class TourFormationModel:
             m.addConstr(gp.quicksum(self.x[i,k]*sum(data.sku_volume[(c_id,s)] for (c_id,s) in data.sku_volume.keys() if c_id == i) for i in data.container_ids) 
                         <= self.max_vol_per_tour * self.u[k], name=f"tourcapacityupper_{k}")
             
-        # Minimum capacity for all tours
-        for k in data.tour_indices:
-            m.addConstr(gp.quicksum(self.x[i,k]*sum(data.sku_volume[(c_id,s)] for (c_id,s) in data.sku_volume.keys() if c_id == i) for i in data.container_ids) 
-                        >= self.min_vol_per_tour * self.u[k], name=f"tourcapacitylower_{k}")
+        #Maxmum number of locations visited per tour
+            
+        # # Minimum capacity for all tours
+        # for k in data.tour_indices:
+        #     m.addConstr(gp.quicksum(self.x[i,k]*sum(data.sku_volume[(c_id,s)] for (c_id,s) in data.sku_volume.keys() if c_id == i) for i in data.container_ids) 
+        #                 >= self.min_vol_per_tour * self.u[k], name=f"tourcapacitylower_{k}")
     
     def _add_sku_fulfillment_constraints(self) -> None:
         """
@@ -585,7 +587,7 @@ class TourFormationModel:
         
         # Set complete objective
         m.setObjective(
-            -self.slack + 
+            self.tour_count + 
             self.travel_distance, 
             GRB.MINIMIZE
         )

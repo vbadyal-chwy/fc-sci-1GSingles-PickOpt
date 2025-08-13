@@ -56,8 +56,8 @@ class ContainerClusterer:
         # Extract key configuration parameters
         self.clustering_config = config.get('clustering', {})
         self.max_cluster_size = self.clustering_config['max_cluster_size']
-        self.containers_per_tour = self.config['tour_formation']['max_containers_per_tour']
-        #self.min_vol_per_tour = self.config['tour_formation']['min_vol_per_tour']
+        #self.containers_per_tour = self.config['tour_formation']['max_containers_per_tour']
+        self.max_vol_per_tour = self.config['tour_formation']['max_vol_per_tour']
         self.max_picking_capacity = container_target
         
         # Create visualization path if needed
@@ -122,14 +122,20 @@ class ContainerClusterer:
             # Step 0: Check for critical containers
             container_ids = container_data['container_id'].unique().tolist()
             self.logger.info(f"Processing {len(container_ids)} unique containers")
+
+            #Create container to volume mapping 
+            container_data['line_volume'] = container_data['pick_quantity'] * container_data['unit_volume']
+            container_volumes = container_data.groupby('container_id')['line_volume'].sum().to_dict()
+            
             
             # Early return if all containers can fit in a single cluster
-            if len(container_ids) <= self.max_cluster_size:
+            total_volume = sum(container_volumes[c_id] for c_id in container_ids)
+            if total_volume <= self.max_cluster_size:
                 self.logger.info(f"All {len(container_ids)} containers fit in a single cluster (Max Cluster Size: {self.max_cluster_size})")
                 # Create single cluster with all containers
                 single_cluster = {'1': container_ids}
                 # Calculate tours needed
-                num_tours = math.ceil(sum(container_ids) / self.containers_per_tour)
+                num_tours = math.ceil(total_volume / self.max_vol_per_tour)
                 cluster_tours = {'1': num_tours}
                 
                 # Store results for later reference
@@ -164,7 +170,7 @@ class ContainerClusterer:
                 # )
                 # Skip to Step 7: Form clusters from all containers
                 clusters, container_clustering_df, clustering_metadata_df = self._handle_standard_clustering_path(
-                    container_data, slotbook_data, container_ids, wh_id, planning_datetime
+                    container_data, slotbook_data, container_volumes, container_ids, wh_id, planning_datetime
                 )
             else:
                 self.logger.info(
@@ -173,19 +179,19 @@ class ContainerClusterer:
                 )
                 # Follow critical container prioritization path
                 clusters, container_clustering_df, clustering_metadata_df = self._handle_critical_container_path(
-                    container_data, slotbook_data, container_ids, critical_containers, wh_id, planning_datetime
+                    container_data, slotbook_data, container_volumes, container_ids, critical_containers, wh_id, planning_datetime
                 )
                 
             self.timing_stats['clustering_branch'] = time.time() - start_branch_time
             
             # Calculate tours for each cluster
-            if not critical_containers or len(container_ids) <= self.max_picking_capacity:
+            if not critical_containers or total_volume <= self.max_picking_capacity:
                 cluster_tours = self.clustering_engine.calculate_tours(
-                    clusters, [], self.containers_per_tour
+                    clusters, container_volumes, [], self.max_vol_per_tour
                 )
             else:
                 cluster_tours = self.clustering_engine.calculate_tours(
-                    clusters, critical_containers, self.containers_per_tour
+                    clusters, container_volumes, critical_containers, self.max_vol_per_tour
                 )
             
             # Store results for later reference
@@ -306,6 +312,7 @@ class ContainerClusterer:
     def _handle_standard_clustering_path(self, 
                                         container_data: pd.DataFrame, 
                                         slotbook_data: pd.DataFrame,
+                                        container_volumes: Dict[str, float],
                                         container_ids: List[str],
                                         wh_id: str = None,
                                         planning_datetime: datetime = None) -> Tuple[Dict[str, List[str]], pd.DataFrame, pd.DataFrame]:
@@ -318,6 +325,8 @@ class ContainerClusterer:
             DataFrame containing container information
         slotbook_data : pd.DataFrame
             DataFrame containing slotbook/SKU information
+        container_volumes : Dict[str, float]
+            Dictionary mapping container IDs to their total volumes
         container_ids : List[str]
             List of all container IDs to process
         wh_id : str, optional
@@ -344,15 +353,15 @@ class ContainerClusterer:
             
             # Step 7: Form clusters from all containers
             all_container_clusters = self.clustering_engine.form_additional_clusters(
-                container_ids, container_data, container_features, self.max_cluster_size
+                container_ids, container_data, container_volumes, container_features, self.max_cluster_size
             )
             
-            # Calculate how many tours we can allocate
-            num_tours = math.ceil(len(container_ids)/self.containers_per_tour)
+            # Calculate how many containers we can allocate
+            remaining_capacity = len(container_ids)
             
             # Select best clusters to fill available capacity
             selected_clusters = self.clustering_engine.select_additional_clusters(
-                all_container_clusters, container_features, num_tours, self.containers_per_tour
+                all_container_clusters, container_features, container_volumes, remaining_capacity, self.max_vol_per_tour
             )
             
             # Extract just the container lists for the return value
@@ -366,7 +375,8 @@ class ContainerClusterer:
                 final_clusters, 
                 [],  # No critical containers in this path
                 container_features,
-                self.containers_per_tour,
+                container_volumes,
+                self.max_vol_per_tour,
                 wh_id=wh_id,
                 planning_datetime=planning_datetime
             )
@@ -391,6 +401,7 @@ class ContainerClusterer:
     def _handle_critical_container_path(self, 
                                        container_data: pd.DataFrame,
                                        slotbook_data: pd.DataFrame,
+                                       container_volumes: Dict[str, float],
                                        container_ids: List[str],
                                        critical_containers: List[str],
                                        wh_id: str = None,
@@ -404,6 +415,8 @@ class ContainerClusterer:
             DataFrame containing container information
         slotbook_data : pd.DataFrame
             DataFrame containing slotbook/SKU information
+        container_volumes : Dict[str, float]
+            Dictionary mapping container IDs to their total volumes
         container_ids : List[str]
             List of all container IDs to process
         critical_containers : List[str]
@@ -444,12 +457,13 @@ class ContainerClusterer:
             container_features = self.feature_processor.extract_container_features(
                 container_data, sku_aisle_mapping, container_ids
             )
-            
+
+            critical_volume = sum(container_volumes[c_id] for c_id in critical_containers)
             # Adjust min_clusters if needed for critical containers
             min_clusters = max(
                 1,
-                (len(critical_containers) // self.max_cluster_size) + 
-                (1 if len(critical_containers) % self.max_cluster_size > 0 else 0)
+                (critical_volume // self.max_cluster_size) + 
+                (1 if critical_volume % self.max_cluster_size > 0 else 0)
             )
             self.logger.info(f"Adjusted minimum clusters to {min_clusters} based on critical containers")
             
@@ -457,6 +471,7 @@ class ContainerClusterer:
             seed_clusters = self.clustering_engine.form_seed_clusters(
                 critical_containers,
                 container_data,
+                container_volumes,
                 container_features,
                 self.max_cluster_size
             )
@@ -506,13 +521,14 @@ class ContainerClusterer:
                 merged_clusters,
                 remaining_non_critical,
                 critical_containers,
+                container_volumes,
                 container_features,
                 self.max_cluster_size
             )
             
             # Step 6: Calculate tours for seed clusters
             cluster_tours = self.clustering_engine.calculate_tours(
-                augmented_clusters, critical_containers, self.containers_per_tour
+                augmented_clusters, container_volumes, critical_containers, self.max_vol_per_tour
             )
             
             # Create dictionary with containers and tours
@@ -525,12 +541,12 @@ class ContainerClusterer:
             }
             
             # Check if we've reached max_clusters with seed clusters
-            total_seed_tours = sum(cluster_tours.values())
+            seed_containers_count = sum(len(seed_result[cluster_id]['containers']) for cluster_id in seed_result) 
             
-            if total_seed_tours >= self.max_picking_capacity // self.containers_per_tour:
+            if seed_containers_count >= self.max_picking_capacity:
                 self.logger.info(
                     f"Seed clusters already use all available capacity "
-                    f"({total_seed_tours} tours)"
+                    f"({seed_containers_count} containers)"
                 )
                 # Extract container lists before returning
                 seed_clusters_only = {
@@ -542,8 +558,9 @@ class ContainerClusterer:
                 final_clusters, cluster_stats, container_clustering_df, clustering_metadata_df = self.clustering_engine.finalize_clusters(
                     seed_clusters_only,
                     critical_containers,
+                    container_volumes,
                     container_features,
-                    self.containers_per_tour,
+                    self.max_vol_per_tour,
                     wh_id=wh_id,
                     planning_datetime=planning_datetime
                 )
@@ -552,9 +569,7 @@ class ContainerClusterer:
                 return final_clusters, container_clustering_df, clustering_metadata_df
             
             # Step 7: Handle remaining capacity with additional clusters
-            remaining_capacity = (
-                self.max_picking_capacity // self.containers_per_tour
-            ) - total_seed_tours
+            remaining_capacity = self.max_picking_capacity - seed_containers_count
             
             final_result = seed_result
             
@@ -563,6 +578,7 @@ class ContainerClusterer:
                 additional_clusters = self.clustering_engine.form_additional_clusters(
                     remaining_containers, 
                     container_data, 
+                    container_volumes,
                     container_features, 
                     self.max_cluster_size
                 )
@@ -570,9 +586,10 @@ class ContainerClusterer:
                 # Select best additional clusters to fill remaining capacity
                 selected_additional = self.clustering_engine.select_additional_clusters(
                     additional_clusters, 
-                    container_features, 
+                    container_features,
+                    container_volumes, 
                     remaining_capacity, 
-                    self.containers_per_tour
+                    self.max_vol_per_tour
                 )
                 
                 # Step 8: Merge seed clusters with selected additional clusters
@@ -581,7 +598,7 @@ class ContainerClusterer:
                 )
             else:
                 self.logger.info(
-                    f"No remaining capacity ({remaining_capacity} tours) or "
+                    f"No remaining capacity ({remaining_capacity} capacity) or "
                     f"no remaining containers ({len(remaining_containers)})"
                 )
             
@@ -595,8 +612,9 @@ class ContainerClusterer:
             final_clusters, cluster_stats, container_clustering_df, clustering_metadata_df = self.clustering_engine.finalize_clusters(
                 final_clusters,
                 critical_containers,
+                container_volumes,
                 container_features,
-                self.containers_per_tour,
+                self.max_vol_per_tour,
                 wh_id=wh_id,
                 planning_datetime=planning_datetime
             )

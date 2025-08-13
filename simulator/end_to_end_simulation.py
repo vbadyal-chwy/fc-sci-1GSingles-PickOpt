@@ -310,7 +310,7 @@ def run_tf_model(planning_timestamp: datetime, tf_input_dir: Path, config: dict,
             input_dir=str(tf_input_dir),
             output_dir=str(output_dir),
             working_dir=str(working_dir),
-            labor_headcount=50  # Default value
+            labor_headcount=15  # TODO: Change labor HC here (Default value)
         )
         logger.info("TF generate_clusters completed")
         

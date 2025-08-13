@@ -76,7 +76,7 @@ class TourFormationSolverService:
 
             # --- Data Preparation ---
             # Extract num_tours from metadata
-            num_tours = cluster_metadata.get('num_tours')
+            num_tours = cluster_metadata.get('num_tours') + self.config['tour_formation']['buffer_tours_TF_model']
             if num_tours is None:
                 self.logger.warning(f"'num_tours' not found in cluster metadata for {cluster_id}. Cannot prepare data.")
                 # Handle error case - return a specific status
@@ -95,7 +95,7 @@ class TourFormationSolverService:
                 container_data=containers_df, 
                 slotbook_data=skus_df,     
                 container_ids=container_ids, 
-                num_tours=num_tours,     
+                num_tours=num_tours,  # Add buffer tours if configured
                 wh_id = wh_id,
                 planning_datetime = planning_timestamp,
                 logger=self.logger

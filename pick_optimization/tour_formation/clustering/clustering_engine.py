@@ -62,6 +62,7 @@ class ClusteringEngine:
         self.max_clusters = self.clustering_params.get('max_clusters', 10)
         self.linkage_method = self.clustering_params.get('linkage_method', 'ward')
         self.max_subclustering_depth = self.clustering_params.get('subclustering', {}).get('max_depth', 3)
+        self.max_clustering_size = self.clustering_params.get('max_cluster_size', 132000)
         
         # Initialize visualizer, passing a specific subdir within output_dir
         from .visualization import Visualizer
@@ -75,6 +76,7 @@ class ClusteringEngine:
     def form_seed_clusters(self,
                           critical_containers: List[str],
                           container_data: pd.DataFrame,
+                          container_volumes: Dict[str, float],
                           container_features: Dict[str, Tuple[float, float, int]],
                           max_cluster_size: int) -> Dict[int, List[str]]:
         """
@@ -86,6 +88,8 @@ class ClusteringEngine:
             List of critical container IDs
         container_data : pd.DataFrame
             DataFrame containing container information
+        container_volumes : Dict[str, float]  
+            Dictionary mapping container IDs to their volumes
         container_features : Dict[str, Tuple[float, float, int]]
             Dictionary mapping container IDs to feature tuples
         max_cluster_size : int
@@ -128,10 +132,11 @@ class ClusteringEngine:
             normalized_features = self.feature_processor.normalize_features(feature_matrix)
             
             # Determine optimal number of clusters
+            valid_critical_volume = sum(container_volumes[c_id] for c_id in valid_critical_containers)
             optimal_clusters = self._determine_optimal_clusters(
                 normalized_features,
-                min_clusters=max(2, int(len(valid_critical_containers) / max_cluster_size)),
-                max_clusters=min(10, len(valid_critical_containers) // 2),
+                min_clusters=max(2, int(valid_critical_volume / max_cluster_size)),
+                max_clusters=min(10, valid_critical_volume // 2),
                 max_cluster_size=max_cluster_size
             )
             
@@ -157,7 +162,7 @@ class ClusteringEngine:
                 self.logger.info(f"Seed cluster {cluster_id}: {len(containers)} containers")
             
             # Check if any clusters exceed max_cluster_size
-            large_clusters = {k: v for k, v in seed_clusters.items() if len(v) > max_cluster_size}
+            large_clusters = {k: v for k, v in seed_clusters.items() if sum(container_volumes[c_id] for c_id in v) > max_cluster_size}
             
             if large_clusters:
                 self.logger.info(f"Found {len(large_clusters)} seed clusters exceeding max size, \
@@ -169,10 +174,12 @@ class ClusteringEngine:
                 next_cluster_id = max(seed_clusters.keys()) + 1
                 
                 for cluster_id, containers in seed_clusters.items():
-                    if len(containers) > max_cluster_size:
+                    cluster_volume = sum(container_volumes[c_id] for c_id in containers)
+                    if cluster_volume > max_cluster_size:
                         # Apply subclustering to this cluster
                         sub_clusters, next_cluster_id = self._apply_subclustering(
                             containers,
+                            container_volumes,
                             container_features,
                             cluster_id, # Pass original int ID for context
                             max_cluster_size,
@@ -212,8 +219,9 @@ class ClusteringEngine:
     def select_additional_clusters(self,
                                  additional_clusters: Dict[str, List[str]],
                                  container_features: Dict[str, Tuple[float, float, int]],
+                                 container_volumes: Dict[str, float],   
                                  remaining_capacity: int,
-                                 containers_per_tour: int) -> Dict[str, Dict[str, Any]]:
+                                 max_vol_per_tour: float) -> Dict[str, Dict[str, Any]]:
         """
         Select additional clusters to fill remaining capacity, prioritizing by quality.
         
@@ -223,10 +231,12 @@ class ClusteringEngine:
             Dictionary mapping cluster IDs to lists of container IDs
         container_features : Dict[str, Tuple[float, float, int]]
             Dictionary mapping container IDs to feature tuples
+        container_volumes : Dict[str, float]
+            Dictionary mapping container IDs to their volumes
         remaining_capacity : int
-            Remaining capacity in number of tours
-        containers_per_tour : int
-            Maximum containers per tour
+            Remaining capacity in number of containers
+        max_vol_per_tour : float
+            Maximum volume per tour
             
         Returns
         -------
@@ -234,7 +244,7 @@ class ClusteringEngine:
             Dictionary mapping cluster IDs to dictionaries with 'containers' and 'tours' keys
         """
         start_time = time.time()
-        self.logger.info(f"Selecting additional clusters to fill remaining capacity of {remaining_capacity} tours")
+        self.logger.info(f"Selecting additional clusters to fill remaining capacity of {remaining_capacity} containers")
         
         try:
             # Skip if no capacity or no clusters
@@ -247,10 +257,11 @@ class ClusteringEngine:
             
             for cluster_id, containers in additional_clusters.items():
                 # Calculate cluster quality
-                quality = self._calculate_cluster_quality(containers, container_features)
+                quality = self._calculate_cluster_quality(containers, container_volumes, container_features)
                 
                 # Calculate tours needed based on total containers
-                tours = math.floor(len(containers) / containers_per_tour)
+                volume_cluster = sum(container_volumes[c_id] for c_id in containers)
+                tours = math.ceil(volume_cluster / max_vol_per_tour)
                 
                 if tours == 0 and len(containers) > 0:
                     tours = 1  # Ensure at least one tour if cluster has containers
@@ -290,11 +301,11 @@ class ClusteringEngine:
                 
                 self.logger.debug(
                     f"Selected cluster {cluster_id}: +{info['tours']} tours, "
-                    f"total now {total_tours}/{remaining_capacity}"
+                    f"total now {total_containers}/{remaining_capacity}"
                 )
                 
                 # Break if we've reached or exceeded capacity - it is acceptable to exceed capacity by a few tours
-                if total_tours >= remaining_capacity:
+                if total_containers >= remaining_capacity:
                     break
             
             self.logger.info(
@@ -320,6 +331,7 @@ class ClusteringEngine:
     
     def _calculate_cluster_quality(self, 
                                  cluster_containers: List[str], 
+                                 container_volumes: Dict[str, float],
                                  container_features: Dict[str, Tuple[float, float, int]]) -> float:
         """
         Calculate a quality metric for a cluster based on feature cohesion.
@@ -328,6 +340,8 @@ class ClusteringEngine:
         ----------
         cluster_containers : List[str]
             List of container IDs in the cluster
+        container_volumes : Dict[str, float]
+            Dictionary mapping container IDs to their volumes
         container_features : Dict[str, Tuple[float, float, int]]
             Dictionary mapping container IDs to features (centroid, span, distinct_aisles)
             
@@ -371,8 +385,8 @@ class ClusteringEngine:
         
         #TODO: Max cluster size
         # Size factor - prefer larger clusters up to max_cluster_size
-        max_size = 500  # Reference size
-        size_score = min(len(valid_containers) / max_size, 1.0)
+        volume_valid_containers = sum(container_volumes[c_id] for c_id in valid_containers)
+        size_score = min(volume_valid_containers / self.max_clustering_size, 1.0)
         
         # Inverse of weighted sum (smaller values = higher quality)
         # Add 0.1 to avoid division by zero
@@ -463,8 +477,9 @@ class ClusteringEngine:
     def finalize_clusters(self, 
                         clusters: Dict[str, List[str]], 
                         critical_containers: List[str],
+                        container_volumes: Dict[str, float],
                         container_features: Dict[str, Tuple[float, float, int]],
-                        containers_per_tour: int,
+                        max_vol_per_tour: float,
                         wh_id: str = None,
                         planning_datetime: datetime = None) -> Tuple[Dict[str, List[str]], pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         """
@@ -476,10 +491,12 @@ class ClusteringEngine:
             Original clusters with arbitrary IDs
         critical_containers : List[str]
             List of critical container IDs
+        container_volumes : Dict[str, float]    
+            Dictionary mapping container IDs to their volumes
         container_features : Dict[str, Tuple[float, float, int]]
             Dictionary mapping container IDs to feature tuples
-        containers_per_tour : int
-            Maximum containers per tour
+        max_vol_per_tour : float
+            Maximum volume per tour
         wh_id : str, optional
             Warehouse ID for database output
         planning_datetime : datetime, optional
@@ -530,12 +547,14 @@ class ClusteringEngine:
                 non_critical_count = len(containers) - critical_count
                 
                 # Calculate tours based on the specified logic
+                critical_volume = sum(container_volumes[c_id] for c_id in containers if c_id in critical_set)
+                total_volume = sum(container_volumes[c_id] for c_id in containers)
                 if critical_count > 0:
                     # For clusters with critical containers, round up based on critical containers
-                    tours = max(1, (critical_count + containers_per_tour - 1) // containers_per_tour)
+                    tours = max(1, math.ceil(critical_volume / max_vol_per_tour))
                 else:
                     # For clusters without critical containers, simply divide total count
-                    tours = max(1, len(containers) // containers_per_tour)
+                    tours = max(1, math.ceil(total_volume / max_vol_per_tour))
                 
                 # Calculate cluster metrics
                 centroids = [container_features[c_id][0] for c_id in containers if c_id in container_features]
@@ -550,7 +569,7 @@ class ClusteringEngine:
                     avg_centroid = min_centroid = max_centroid = 0
                     
                 if spans:
-                    avg_span = sum(spans) / len(spans)
+                    avg_span = 0
                 else:
                     avg_span = 0
                     
@@ -563,6 +582,7 @@ class ClusteringEngine:
                 cluster_stats.append({
                     'ClusterID': new_id,
                     'TotalContainers': len(containers),
+                    'ClusterVolume': total_volume,
                     'CriticalContainers': critical_count,
                     'NonCriticalContainers': non_critical_count,
                     'CriticalPercentage': 100 * critical_count / len(containers) if containers else 0,
@@ -582,13 +602,14 @@ class ClusteringEngine:
                 from tabulate import tabulate
                 
                 # Prepare data for tabulation
-                headers = ["Cluster ID", "Total", "Critical", "Non-Critical", "Critical %", "Tours", "Min Aisle", "Max Aisle", "Avg Centroid", "Avg Span"]
+                headers = ["Cluster ID", "Total", "Volume", "Critical", "Non-Critical", "Critical %", "Tours", "Min Aisle", "Max Aisle", "Avg Centroid", "Avg Span"]
                 table_data = []
                 
                 for stats in cluster_stats:
                     table_data.append([
                         stats['ClusterID'],
                         stats['TotalContainers'],
+                        f"{stats['ClusterVolume']:.1f}",
                         stats['CriticalContainers'],
                         stats['NonCriticalContainers'],
                         f"{stats['CriticalPercentage']:.1f}%",
@@ -606,11 +627,13 @@ class ClusteringEngine:
                 total_non_critical = total_containers - total_critical
                 critical_pct = 100 * total_critical / total_containers if total_containers else 0
                 total_tours = sum(stats['NumTours'] for stats in cluster_stats)
+                total_volume = sum(sum(container_volumes[c_id] for c_id in containers) for containers in renumbered_clusters.values())
                 
                 # Add a totals row
                 table_data.append([
                     "TOTAL",
                     total_containers,
+                    total_volume,
                     total_critical,
                     total_non_critical,
                     f"{critical_pct:.1f}%",
@@ -681,7 +704,7 @@ class ClusteringEngine:
                     containers = renumbered_clusters[cluster_id]
                     
                     # Calculate cluster quality score
-                    quality_score = self._calculate_cluster_quality(containers, container_features)
+                    quality_score = self._calculate_cluster_quality(containers, container_volumes, container_features)
                     
                     clustering_metadata_rows.append({
                         'wh_id': wh_id,
@@ -765,6 +788,7 @@ class ClusteringEngine:
                 
                 # Calculate silhouette score
                 try:
+                    #TODO: problem here
                     score = silhouette_score(feature_matrix, cluster_labels)
                     silhouette_scores[n_clusters] = score
                     
@@ -930,6 +954,7 @@ class ClusteringEngine:
                         seed_clusters: Dict[str, List[str]],
                         non_critical_containers: List[str],
                         critical_containers: List[str],
+                        container_volumes: Dict[str, float],
                         container_features: Dict[str, Tuple[float, float, int]],
                         max_cluster_size: int) -> Tuple[Dict[str, List[str]], List[str]]:
         """
@@ -943,6 +968,8 @@ class ClusteringEngine:
             List of non-critical container IDs available for assignment
         critical_containers : List[str]
             List of critical container IDs
+        container_volumes : Dict[str, float]
+            Dictionary mapping container IDs to their volumes
         container_features : Dict[str, Tuple[float, float, int]]
             Dictionary mapping container IDs to feature tuples
         max_cluster_size : int
@@ -976,15 +1003,16 @@ class ClusteringEngine:
                 critical_in_cluster = [c_id for c_id in containers if c_id in critical_set]
                 non_critical_in_cluster = [c_id for c_id in containers if c_id not in critical_set]
                 
-                critical_count = len(critical_in_cluster)
-                current_total = len(containers)
+                critical_vol = sum(container_volumes[c_id] for c_id in critical_in_cluster)
+                non_critical_vol = sum(container_volumes[c_id] for c_id in non_critical_in_cluster)
+                current_total_vol = sum(container_volumes[c_id] for c_id in containers)
                 
                 # Space left is based on critical containers only, not total
-                space_left = max_cluster_size - critical_count
+                space_left = max_cluster_size - critical_vol
                 
                 self.logger.info(
-                    f"Cluster {cluster_id}: critical={critical_count}, non-critical={len(non_critical_in_cluster)}, " 
-                    f"total={current_total}, space left={space_left}"
+                    f"Cluster {cluster_id}: critical={critical_vol}, non-critical={non_critical_vol}, " 
+                    f"total={current_total_vol}, space left={space_left}"
                 )
                 
                 # If no space left based on critical containers, remove all non-critical
@@ -998,10 +1026,10 @@ class ClusteringEngine:
                     continue
                 
                 # If we already have non-critical containers, check if we need to remove some
-                if len(non_critical_in_cluster) > space_left:
+                if non_critical_vol > space_left:
                     self.logger.info(
                         f"Cluster {cluster_id} has too many non-critical containers, "
-                        f"removing {len(non_critical_in_cluster) - space_left}"
+                        f"removing {non_critical_vol - space_left}"
                     )
                     
                     # Calculate distances to cluster center for existing non-critical containers
@@ -1018,7 +1046,15 @@ class ClusteringEngine:
                     nc_distances.sort(key=lambda x: x[1])
                     
                     # Keep only the closest non-critical containers
-                    keep_containers = [c_id for c_id, _ in nc_distances[:space_left]]
+                    keep_containers = []
+                    total_added_volume = 0
+                    for c_id, _ in nc_distances:
+                        c_vol = container_volumes.get(c_id, 0)
+                        if total_added_volume + c_vol <= space_left:
+                            keep_containers.append(c_id)
+                            total_added_volume += c_vol
+                        else:
+                            break
                     
                     # Remove the extra non-critical containers
                     remove_containers = [c_id for c_id in non_critical_in_cluster if c_id not in keep_containers]
@@ -1031,7 +1067,7 @@ class ClusteringEngine:
                         remaining.add(c_id)
                         
                     # Update space left
-                    space_left = max_cluster_size - len(final_clusters[cluster_id])
+                    space_left = max_cluster_size - sum(container_volumes[c_id] for c_id in final_clusters[cluster_id])
                 else:
                     # We still have space for more non-critical containers
                     space_left = space_left - len(non_critical_in_cluster)
@@ -1054,7 +1090,16 @@ class ClusteringEngine:
                     container_distances.sort(key=lambda x: x[1])
                     
                     # Add closest containers
-                    containers_to_add = [c_id for c_id, _ in container_distances[:space_left]]
+                    containers_to_add = []
+                    total_added_volume = 0
+                    for c_id, _ in container_distances:
+                        c_vol = container_volumes.get(c_id, 0)
+                        if total_added_volume + c_vol <= space_left:
+                            containers_to_add.append(c_id)
+                            total_added_volume += c_vol
+                        else:
+                            break
+                    
                     final_clusters[cluster_id].extend(containers_to_add)
                     
                     self.logger.info(f"Added {len(containers_to_add)} additional non-critical containers to cluster {cluster_id}")
@@ -1066,12 +1111,12 @@ class ClusteringEngine:
             
             # Log final cluster sizes
             for cluster_id, containers in final_clusters.items():
-                critical_count = sum(1 for c_id in containers if c_id in critical_set)
-                non_critical_count = len(containers) - critical_count
+                critical_vol = sum(container_volumes[c_id] for c_id in containers if c_id in critical_set)
+                non_critical_vol = sum(container_volumes[c_id] for c_id in containers) - critical_vol
                 
                 self.logger.info(
-                    f"Augmented cluster {cluster_id}: {critical_count} critical + "
-                    f"{non_critical_count} non-critical = {len(containers)} total"
+                    f"Augmented cluster {cluster_id}: {critical_vol} critical + "
+                    f"{non_critical_vol} non-critical = {critical_vol+non_critical_vol} total"
                 )
             
             remaining_list = list(remaining)
@@ -1104,8 +1149,9 @@ class ClusteringEngine:
     # STEP 6: Calculate tours
     def calculate_tours(self,
                        clusters: Dict[int, List[str]],
+                       container_volumes: Dict[str, float],
                        critical_containers: List[str],
-                       containers_per_tour: int) -> Dict[int, int]:
+                       max_vol_per_tour: float) -> Dict[int, int]:
         """
         Calculate tours for each cluster based on critical containers.
         
@@ -1115,6 +1161,8 @@ class ClusteringEngine:
             Dictionary mapping cluster IDs to lists of container IDs
         critical_containers : List[str]
             List of critical container IDs
+        container_volumes : Dict[str, float]
+            Dictionary mapping container IDs to their volumes
         containers_per_tour : int
             Maximum containers per tour
             
@@ -1133,20 +1181,21 @@ class ClusteringEngine:
             
             for cluster_id, container_ids in clusters.items():
                 # Count critical containers in this cluster
-                critical_count = sum(1 for c_id in container_ids if c_id in critical_set)
+                critical_vol = sum(container_volumes[c_id] for c_id in container_ids if c_id in critical_set)
+                total_vol = sum(container_volumes[c_id] for c_id in container_ids)
                 
-                if critical_count > 0:
+                if critical_vol > 0:
                     # For clusters with critical containers, round up based on critical containers
-                    tours = max(1, (critical_count + containers_per_tour - 1) // containers_per_tour)
+                    tours = max(1, math.ceil(critical_vol / max_vol_per_tour))
                 else:
                     # For clusters without critical containers, divide and round down
-                    tours = max(1, math.floor(len(container_ids) / containers_per_tour))
+                    tours = max(1, math.ceil(total_vol / max_vol_per_tour))
                 
                 # Store number of tours
                 cluster_tours[cluster_id] = tours
                 total_tours += tours
                 
-                self.logger.debug(f"Cluster {cluster_id}: {critical_count} critical containers, {tours} tours")
+                self.logger.debug(f"Cluster {cluster_id}: {critical_vol} critical containers, {tours} tours")
             
             self.logger.info(f"Total tours across all clusters: {total_tours}")
             
@@ -1165,6 +1214,7 @@ class ClusteringEngine:
     def form_additional_clusters(self,
                                remaining_containers: List[str],
                                container_data: pd.DataFrame,
+                               container_volumes: Dict[str, float],
                                container_features: Dict[str, Tuple[float, float, int]],
                                max_cluster_size: int) -> Dict[str, List[str]]:
         """
@@ -1176,6 +1226,8 @@ class ClusteringEngine:
             List of remaining container IDs
         container_data : pd.DataFrame
             DataFrame containing container information
+        container_volumes : Dict[str, float]
+            Dictionary mapping container IDs to their volumes
         container_features : Dict[str, Tuple[float, float, int]]
             Dictionary mapping container IDs to feature tuples
         max_cluster_size : int
@@ -1216,8 +1268,9 @@ class ClusteringEngine:
             normalized_features = self.feature_processor.normalize_features(feature_matrix)
             
             # Estimate optimal number of clusters based on max_cluster_size
-            estimated_clusters = max(2, len(valid_containers) // max_cluster_size + 1)
-            max_possible_clusters = min(10, len(valid_containers) // 2)
+            valid_containers_vol = sum(container_volumes[c_id] for c_id in valid_containers)
+            estimated_clusters = max(2, math.ceil(valid_containers_vol / max_cluster_size))
+            max_possible_clusters = min(10, math.ceil(valid_containers_vol / 2))
             
             # Determine optimal number of clusters
             optimal_clusters = self._determine_optimal_clusters(
@@ -1257,14 +1310,15 @@ class ClusteringEngine:
                 next_clusters_to_process = {}
                 
                 for cluster_id, containers in clusters_to_process.items():
+                    cluster_volume = sum(container_volumes[c_id] for c_id in containers)
                     # If the cluster is small enough, add it to the final results
-                    if len(containers) <= max_cluster_size:
+                    if cluster_volume <= max_cluster_size:
                         final_clusters[cluster_id] = containers
-                        self.logger.debug(f"Cluster {cluster_id} size {len(containers)} is within limit")
+                        self.logger.debug(f"Cluster {cluster_id} size {cluster_volume} is within limit")
                         continue
                         
                     # Otherwise, subdivide this cluster
-                    self.logger.info(f"Subdividing cluster {cluster_id} with {len(containers)} containers")
+                    self.logger.info(f"Subdividing cluster {cluster_id} with {cluster_volume} volume")
                     
                     # Initialize cluster ID counter for first call or use the running counter
                     current_cluster_id_counter = getattr(self, '_current_cluster_id_counter', 1)
@@ -1272,6 +1326,7 @@ class ClusteringEngine:
                     # Apply subclustering
                     sub_clusters, updated_counter = self._apply_subclustering(
                         containers,
+                        container_volumes,
                         container_features,
                         cluster_id,
                         max_cluster_size,
@@ -1284,14 +1339,15 @@ class ClusteringEngine:
                     
                     # Process subclusters
                     for sub_id, sub_containers in sub_clusters.items():
+                        sub_cluster_volume = sum(container_volumes[c_id] for c_id in sub_containers)
                         # If subcluster is small enough, add to final results
-                        if len(sub_containers) <= max_cluster_size:
+                        if sub_cluster_volume <= max_cluster_size:
                             final_clusters[sub_id] = sub_containers
-                            self.logger.debug(f"Subcluster {sub_id} size {len(sub_containers)} is within limit")
+                            self.logger.debug(f"Subcluster {sub_id} size {sub_cluster_volume} is within limit")
                         else:
                             # Otherwise, add to next iteration for further subdivision
                             next_clusters_to_process[sub_id] = sub_containers
-                            self.logger.debug(f"Subcluster {sub_id} size {len(sub_containers)} needs further subdivision")
+                            self.logger.debug(f"Subcluster {sub_id} size {sub_cluster_volume} needs further subdivision")
                 
                 clusters_to_process = next_clusters_to_process
                 
@@ -1311,7 +1367,7 @@ class ClusteringEngine:
                     final_clusters[f"{cluster_id}_forced"] = containers
             
             # Log final statistics
-            cluster_sizes = [len(containers) for containers in final_clusters.values()]
+            cluster_sizes = [sum(container_volumes[c_id] for c_id in containers) for containers in final_clusters.values()]
             if cluster_sizes:
                 self.logger.info(f"Final additional clusters: {len(final_clusters)}")
                 self.logger.info(f"Average cluster size: {np.mean(cluster_sizes):.1f}")
@@ -1350,6 +1406,7 @@ class ClusteringEngine:
     # Helper method for subclustering
     def _apply_subclustering(self,
                            containers: List[str],
+                           container_volumes: Dict[str, float],
                            container_features: Dict[str, Tuple[float, float, int]],
                            parent_cluster_id: int,
                            max_cluster_size: int,
@@ -1363,6 +1420,8 @@ class ClusteringEngine:
         ----------
         containers : List[str]
             List of container IDs in the cluster to subcluster
+        container_volumes : Dict[str, float]
+            Dictionary mapping container IDs to their volumes
         container_features : Dict[str, Tuple[float, float, int]]
             Dictionary mapping container IDs to feature tuples
         parent_cluster_id : int
@@ -1380,10 +1439,11 @@ class ClusteringEngine:
             A dictionary mapping new integer cluster IDs to container lists,
             and the updated cluster ID counter.
         """
+        cluster_volume = sum(container_volumes[c_id] for c_id in containers)
         if depth >= self.max_subclustering_depth:
             self.logger.warning(
                 f"Max subclustering depth ({self.max_subclustering_depth}) reached for parent {parent_cluster_id}. "
-                f"Returning oversized cluster with {len(containers)} containers."
+                f"Returning oversized cluster with {cluster_volume} volume."
             )
             # Assign the next available ID to this oversized cluster
             new_cluster_id = current_cluster_id_counter
@@ -1426,11 +1486,13 @@ class ClusteringEngine:
         updated_cluster_id_counter = current_cluster_id_counter
 
         for temp_label, sub_containers in sub_clusters_temp.items():
+            sub_cluster_volume = sum(container_volumes[c_id] for c_id in sub_containers)
             if len(sub_containers) > max_cluster_size:
-                self.logger.debug(f"Recursively subclustering part of parent {parent_cluster_id} (depth {depth+1}) with {len(sub_containers)} containers")
+                self.logger.debug(f"Recursively subclustering part of parent {parent_cluster_id} (depth {depth+1}) with {sub_cluster_volume} volume")
                 # Recursively call subclustering
                 recursive_clusters, updated_cluster_id_counter = self._apply_subclustering(
                     sub_containers,
+                    container_volumes,
                     container_features,
                     parent_cluster_id, # Pass parent ID for context
                     max_cluster_size,

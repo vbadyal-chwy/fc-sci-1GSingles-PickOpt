@@ -149,7 +149,7 @@ def prepare_model_data(
         for _, row in slotbook_data.iterrows():
             aisle_inventory[(row['item_number'], row['aisle_sequence'])] = row['actual_qty']
         
-        tour_indices = list(range(num_tours))
+        tour_indices = list(range(int(num_tours)))
         
         logger.info(f"Generated {len(tour_indices)} tours for {len(container_ids)} containers")
         

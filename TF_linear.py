@@ -144,9 +144,9 @@ max_aisle = sample_slotbook['aisle_sequence'].max()
 
 #TODO: Changes here
 # Generate slack weights for each container id randomly choosing from 5, 10, or 15
-slack_weights = {cid: random.choice([5, 5, 5]) for cid in container_ids}
+slack_weights = {cid: random.choice([0, 10, 15]) for cid in container_ids}
 
-critical_containers = [cid for cid, w in slack_weights.items() if w == 10]
+critical_containers = [cid for cid, w in slack_weights.items() if w == 15]
 
 # Add slack_weights and critical_container flag to sample_containers
 sample_containers['slack_weight'] = sample_containers['container_id'].map(slack_weights)
@@ -242,8 +242,8 @@ model.update()
 #TODO: Changes here
 # _add_single_tour_assignment_constraints
 for i in model_data.container_ids:
-            model.addConstr(gp.quicksum(x[i,k] for k in model_data.tour_indices) <= 1, name=f"singletour_{i}")
-            #model.addConstr(gp.quicksum(x[i,k] for k in model_data.tour_indices) == 1, name=f"singletour_{i}")
+    #model.addConstr(gp.quicksum(x[i,k] for k in model_data.tour_indices) <= 1, name=f"singletour_{i}")
+    model.addConstr(gp.quicksum(x[i,k] for k in model_data.tour_indices) == 1, name=f"singletour_{i}")
 
 # _add_tour_capacity_constraints
 for k in model_data.tour_indices:
@@ -253,10 +253,10 @@ for k in model_data.tour_indices:
 
 #TODO: Changes here
 # _add_tour_capacity_constraints
-for k in model_data.tour_indices:
-    model.addConstr(
-        gp.quicksum(x[i,k] * model_data.container_volumes[i] for i in model_data.container_ids) 
-        >= CONFIG['min_volume_per_tour'] * u[k], name=f"tourcapacitylower_{k}")
+# for k in model_data.tour_indices:
+#     model.addConstr(
+#         gp.quicksum(x[i,k] * model_data.container_volumes[i] for i in model_data.container_ids) 
+#         >= CONFIG['min_volume_per_tour'] * u[k], name=f"tourcapacitylower_{k}")
     
 # _add_sku_fulfillment_constraints
 for i in model_data.container_ids:
@@ -410,7 +410,7 @@ num_tours = CONFIG['new_tour_weight']*gp.quicksum(u[k] for k in model_data.tour_
 
 #TODO: Changes here
 # Set complete objective
-model.setObjective(travel_distance - slack)#+ num_tours)# #num_tours, GRB.MINIMIZE)
+model.setObjective(travel_distance + num_tours)# #num_tours, GRB.MINIMIZE)
         
 model.update()
 
@@ -453,9 +453,9 @@ if model.SolCount > 0:
     slack_term = sum(slack_weights.get(i, 0.0) * x[i,k].X for i in model_data.container_ids for k in model_data.tour_indices)
     travel_term = CONFIG['travel_distance_weight'] * sum(v[a,k].X for a, k in v.keys()) + sum((max_aisle_var[k].X - min_aisle_var[k].X) for k in model_data.tour_indices)
     tour_term = CONFIG['new_tour_weight'] * sum(u[k].X for k in model_data.tour_indices)
-    print(f" Slack term: {-slack_term}")
+    #print(f" Slack term: {-slack_term}")
     print(f" Travel term: {travel_term}")
-    #print(f" Tour term: {tour_term}")
+    print(f" Tour term: {tour_term}")
     print("\nTour Assignments:")
     for tour_id, containers in solution['tours'].items():
         volume_used = sum(model_data.container_volumes[c] for c in containers)
